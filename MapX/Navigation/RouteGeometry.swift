@@ -48,7 +48,7 @@ enum RouteGeometry {
             return (0, .infinity)
         }
         guard line.pointCount > 1 else {
-            return (0, MKMetersBetweenMapPoints(point, points[0]))
+            return (0, point.distance(to: points[0]))
         }
 
         var bestDistance = Double.infinity
@@ -66,8 +66,8 @@ enum RouteGeometry {
                 : 0
             let projected = MKMapPoint(x: start.x + fraction * dx,
                                        y: start.y + fraction * dy)
-            let cross = MKMetersBetweenMapPoints(point, projected)
-            let segmentMeters = MKMetersBetweenMapPoints(start, end)
+            let cross = point.distance(to: projected)
+            let segmentMeters = start.distance(to: end)
             if cross < bestDistance {
                 bestDistance = cross
                 bestProgress = completed + fraction * segmentMeters
