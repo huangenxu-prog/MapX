@@ -4,8 +4,10 @@ import MapKit
 import CoreLocation
 
 struct ContentView: View {
+    @Environment(\.scenePhase) private var scenePhase
     @StateObject private var locationService = LocationService()
     @StateObject private var guidance = NavigationSession()
+    @StateObject private var savedPlaces = SavedPlacesStore()
 
     @State private var camera: MapCameraPosition = .automatic
     @State private var query = ""
@@ -23,6 +25,7 @@ struct ContentView: View {
     @State private var visibleMapDistance: CLLocationDistance = 8_000
     @State private var repeatedLocateDistance: CLLocationDistance?
     @State private var pendingLocate = false
+    @State private var followRecoveryTask: Task<Void, Never>?
     @FocusState private var searchFocused: Bool
 
     private var selectedRoute: MKRoute? {
@@ -54,6 +57,9 @@ struct ContentView: View {
                 if distance.isFinite && distance > 0 {
                     visibleMapDistance = distance
                 }
+                if guidance.isActive && camera.positionedByUser {
+                    scheduleFollowRecovery()
+                }
             }
             .mapControls {
                 MapCompass()
@@ -74,6 +80,17 @@ struct ContentView: View {
                                 .font(.headline).lineLimit(3)
                         }
                         Spacer(minLength: 0)
+                        Button {
+                            guidance.setVoiceEnabled(!guidance.voiceEnabled)
+                        } label: {
+                            Image(systemName: guidance.voiceEnabled
+                                  ? "speaker.wave.2.fill" : "speaker.slash.fill")
+                                .font(.system(size: 18, weight: .semibold))
+                                .frame(width: 44, height: 44)
+                                .background(.white.opacity(0.14), in: Circle())
+                        }
+                        .accessibilityLabel(guidance.voiceEnabled ? "关闭语音导航" : "开启语音导航")
+                        .accessibilityIdentifier("mapx.voiceToggle")
                     }
                     .padding(16)
                     .foregroundStyle(.white)
@@ -109,6 +126,7 @@ struct ContentView: View {
                 } else {
                     searchBar
                     if showingResults { searchResultsView }
+                    else if searchFocused && query.isEmpty { savedPlacesPanel }
                     Spacer(minLength: 12)
                     HStack(alignment: .bottom, spacing: 12) {
                         if let selectedRoute { routePanel(selectedRoute) }
@@ -130,7 +148,24 @@ struct ContentView: View {
         .preferredColorScheme(guidance.isActive ? .dark : nil)
         .tint(.blue)
         .onAppear {
+            let session = guidance
+            locationService.onNavigationLocationUpdate = { [weak session] fix in
+                Task { @MainActor in session?.update(fix) }
+            }
+            let gpsService = locationService
+            guidance.onArrival = { [weak gpsService] in
+                // The background GPS must stop even if SwiftUI doesn't render
+                // the arrival view until the screen is unlocked.
+                gpsService?.setNavigating(false)
+            }
+            locationService.setAppForeground(scenePhase == .active)
             locationService.requestLocation()
+        }
+        .onChange(of: scenePhase) { _, phase in
+            locationService.setAppForeground(phase == .active)
+            if phase == .active && guidance.isActive {
+                followUser()
+            }
         }
         .onReceive(locationService.$location.compactMap { $0 }) { fix in
             if pendingLocate {
@@ -143,11 +178,14 @@ struct ContentView: View {
                                                      latitudinalMeters: 8000,
                                                      longitudinalMeters: 8000))
             }
-            guard guidance.isActive else { return }
-            guidance.update(fix)
         }
         .onChange(of: camera.positionedByUser) { _, movedByUser in
-            if movedByUser { repeatedLocateDistance = nil }
+            if movedByUser {
+                repeatedLocateDistance = nil
+                if guidance.isActive { scheduleFollowRecovery() }
+            } else {
+                followRecoveryTask?.cancel()
+            }
         }
         .onChange(of: guidance.needsReroute) { _, _ in
             guard guidance.isActive, let fix = locationService.location else { return }
@@ -162,6 +200,7 @@ struct ContentView: View {
         .onChange(of: guidance.arrived) { _, arrived in
             if arrived {
                 stopNavigation()
+                errorMessage = "已到达目的地附近，导航已自动结束。"
             }
         }
         .alert("提示", isPresented: Binding(
@@ -193,6 +232,7 @@ struct ContentView: View {
     }
 
     private func followUser() {
+        followRecoveryTask?.cancel()
         let fallback: MapCameraPosition
         if let fix = locationService.location {
             fallback = .camera(MapCamera(centerCoordinate: fix.coordinate, distance: 700))
@@ -200,6 +240,20 @@ struct ContentView: View {
             fallback = .automatic
         }
         camera = .userLocation(followsHeading: true, fallback: fallback)
+    }
+
+    private func scheduleFollowRecovery() {
+        followRecoveryTask?.cancel()
+        guard guidance.isActive else { return }
+        followRecoveryTask = Task { @MainActor in
+            do {
+                try await Task.sleep(for: .seconds(9))
+            } catch {
+                return
+            }
+            guard guidance.isActive, camera.positionedByUser else { return }
+            followUser()
+        }
     }
 
     private func locateAndZoom() {
@@ -286,6 +340,79 @@ struct ContentView: View {
         }
         .frame(maxHeight: 280)
         .background(.regularMaterial, in: RoundedRectangle(cornerRadius: 18))
+    }
+
+    @ViewBuilder
+    private var savedPlacesPanel: some View {
+        if savedPlaces.home != nil || savedPlaces.work != nil || !savedPlaces.recent.isEmpty {
+            ScrollView {
+                VStack(alignment: .leading, spacing: 0) {
+                    if let home = savedPlaces.home {
+                        savedPlaceRow(home, symbol: "house.fill", title: "家")
+                    }
+                    if let work = savedPlaces.work {
+                        savedPlaceRow(work, symbol: "building.2.fill", title: "公司")
+                    }
+                    if !savedPlaces.recent.isEmpty {
+                        HStack {
+                            Text("最近目的地")
+                                .font(.caption.weight(.medium))
+                                .foregroundStyle(.secondary)
+                            Spacer()
+                            Button("清空") { savedPlaces.clearRecent() }
+                                .font(.caption)
+                        }
+                        .padding(.horizontal, 14)
+                        .padding(.top, 12)
+                        .padding(.bottom, 4)
+
+                        ForEach(savedPlaces.recent.prefix(6)) { place in
+                            savedPlaceRow(place, symbol: "clock.arrow.circlepath", title: place.name)
+                                .contextMenu {
+                                    Button("设为家") { savedPlaces.markHome(place) }
+                                    Button("设为公司") { savedPlaces.markWork(place) }
+                                    Button("删除此记录", role: .destructive) {
+                                        savedPlaces.removeRecent(place)
+                                    }
+                                }
+                        }
+                        Text("长按最近目的地可设为家或公司")
+                            .font(.caption2)
+                            .foregroundStyle(.secondary)
+                            .padding(.horizontal, 14)
+                            .padding(.bottom, 12)
+                    }
+                }
+            }
+            .frame(maxHeight: 300)
+            .background(.regularMaterial, in: RoundedRectangle(cornerRadius: 18))
+        }
+    }
+
+    private func savedPlaceRow(_ place: SavedPlace, symbol: String, title: String) -> some View {
+        Button {
+            select(place.mapItem)
+        } label: {
+            HStack(spacing: 12) {
+                Image(systemName: symbol)
+                    .frame(width: 24)
+                    .foregroundStyle(.secondary)
+                VStack(alignment: .leading, spacing: 2) {
+                    Text(title)
+                        .font(.subheadline.weight(.medium))
+                        .lineLimit(1)
+                    Text(place.address)
+                        .font(.caption)
+                        .foregroundStyle(.secondary)
+                        .lineLimit(1)
+                }
+                Spacer(minLength: 0)
+            }
+            .padding(.horizontal, 14)
+            .padding(.vertical, 10)
+            .contentShape(Rectangle())
+        }
+        .buttonStyle(.plain)
     }
 
     private var locateButton: some View {
@@ -381,9 +508,9 @@ struct ContentView: View {
     }
 
     private func select(_ item: MKMapItem) {
-        repeatedLocateDistance = nil
         dismissKeyboard()
         stopNavigation()
+        savedPlaces.add(item)
         destination = item
         routes = []
         selectedRouteIndex = 0
@@ -422,7 +549,8 @@ struct ContentView: View {
                 selectedRouteIndex = 0
                 if continueNavigation {
                     guard guidance.isActive else { return }
-                    guidance.start(response.routes[0])
+                    guidance.replaceRoute(response.routes[0],
+                                          destination: destination.placemark.coordinate)
                     if let fix = locationService.location { guidance.update(fix) }
                 } else {
                     camera = .rect(response.routes[0].polyline.boundingMapRect)
@@ -440,12 +568,15 @@ struct ContentView: View {
         selectedRouteIndex = index
         camera = .rect(routes[index].polyline.boundingMapRect)
         if guidance.isActive {
-            guidance.start(routes[index])
+            if let destination {
+                guidance.replaceRoute(routes[index],
+                                      destination: destination.placemark.coordinate)
+            }
         }
     }
 
     private func startNavigation() {
-        guard let selectedRoute else { return }
+        guard let selectedRoute, let destination else { return }
         guard locationService.isAuthorized else {
             locationService.requestLocation()
             errorMessage = "请允许定位后再开始导航。"
@@ -458,7 +589,7 @@ struct ContentView: View {
         dismissKeyboard()
         showingResults = false
         followUser()
-        guidance.start(selectedRoute)
+        guidance.start(selectedRoute, destination: destination.placemark.coordinate)
         locationService.setNavigating(true)
         if let fix = locationService.location {
             guidance.update(fix)
@@ -466,6 +597,7 @@ struct ContentView: View {
     }
 
     private func stopNavigation() {
+        followRecoveryTask?.cancel()
         pendingLocate = false
         repeatedLocateDistance = nil
         routeTask?.cancel()

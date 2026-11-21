@@ -1,25 +1,30 @@
-import CoreLocation
 import Combine
+import CoreLocation
 import Foundation
 
-/// Owns location authorization and updates. No background-location entitlement is requested.
+/// Core Location lives independently of map rendering so GPS callbacks keep arriving
+/// when the user locks the screen during an explicitly started navigation session.
 final class LocationService: NSObject, ObservableObject, CLLocationManagerDelegate {
     @Published private(set) var location: CLLocation?
     @Published private(set) var authorizationStatus: CLAuthorizationStatus
 
+    /// Invoked for fresh navigation fixes, including background-delivered updates.
+    /// Callers should hop to the main actor before updating SwiftUI-observable state.
+    var onNavigationLocationUpdate: ((CLLocation) -> Void)?
+
     private let manager = CLLocationManager()
+    private var navigating = false
+    private var appIsForeground = true
 
     override init() {
         authorizationStatus = manager.authorizationStatus
         super.init()
         manager.delegate = self
+        manager.activityType = .automotiveNavigation
         manager.desiredAccuracy = kCLLocationAccuracyBest
         manager.distanceFilter = 10
-        manager.activityType = .automotiveNavigation
         manager.pausesLocationUpdatesAutomatically = true
-        if isAuthorized {
-            manager.startUpdatingLocation()
-        }
+        updateDelivery()
     }
 
     var isAuthorized: Bool {
@@ -32,28 +37,43 @@ final class LocationService: NSObject, ObservableObject, CLLocationManagerDelega
         case .notDetermined:
             manager.requestWhenInUseAuthorization()
         case .authorizedAlways, .authorizedWhenInUse:
-            manager.startUpdatingLocation()
+            updateDelivery()
         default:
             break
         }
     }
 
-    func setNavigating(_ navigating: Bool) {
-        manager.desiredAccuracy = navigating ? kCLLocationAccuracyBestForNavigation : kCLLocationAccuracyBest
-        manager.distanceFilter = navigating ? 5 : 10
-        manager.pausesLocationUpdatesAutomatically = !navigating
-        if isAuthorized {
-            manager.startUpdatingLocation()
+    func setNavigating(_ active: Bool) {
+        navigating = active
+        manager.activityType = .automotiveNavigation
+        manager.desiredAccuracy = active ? kCLLocationAccuracyBestForNavigation : kCLLocationAccuracyBest
+        manager.distanceFilter = active ? 5 : 10
+        manager.pausesLocationUpdatesAutomatically = !active
+        // The Info.plist explicitly declares UIBackgroundModes/location. Enable this
+        // *only* for a user-started trip, never just because the app was opened.
+        manager.allowsBackgroundLocationUpdates = active && isAuthorized
+        manager.showsBackgroundLocationIndicator = active
+        updateDelivery()
+    }
+
+    func setAppForeground(_ foreground: Bool) {
+        appIsForeground = foreground
+        updateDelivery()
+    }
+
+    private func updateDelivery() {
+        guard isAuthorized && (appIsForeground || navigating) else {
+            manager.stopUpdatingLocation()
+            return
         }
+        manager.startUpdatingLocation()
     }
 
     func locationManagerDidChangeAuthorization(_ manager: CLLocationManager) {
         authorizationStatus = manager.authorizationStatus
-        if isAuthorized {
-            manager.startUpdatingLocation()
-        } else {
-            location = nil
-        }
+        manager.allowsBackgroundLocationUpdates = navigating && isAuthorized
+        updateDelivery()
+        if !isAuthorized { location = nil }
     }
 
     func locationManager(_ manager: CLLocationManager, didUpdateLocations locations: [CLLocation]) {
@@ -62,9 +82,12 @@ final class LocationService: NSObject, ObservableObject, CLLocationManagerDelega
               latest.horizontalAccuracy >= 0,
               latest.horizontalAccuracy <= 150 else { return }
         location = latest
+        if navigating {
+            onNavigationLocationUpdate?(latest)
+        }
     }
 
     func locationManager(_ manager: CLLocationManager, didFailWithError error: Error) {
-        // The UI reacts to authorization status and missing GPS fixes.
+        // A temporarily missing GPS fix must not fabricate a new position.
     }
 }
