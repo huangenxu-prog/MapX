@@ -20,7 +20,6 @@ struct ContentView: View {
     @State private var isRouting = false
     @State private var errorMessage: String?
     @State private var hasCenteredOnUser = false
-    @State private var course: Double?
     @FocusState private var searchFocused: Bool
 
     private var selectedRoute: MKRoute? {
@@ -29,16 +28,9 @@ struct ContentView: View {
 
     var body: some View {
         ZStack {
-            Map(position: $camera, interactionModes: guidance.isActive ? [] : .all) {
-                if guidance.isActive, let fix = locationService.location, course != nil {
-                    Annotation("当前位置", coordinate: fix.coordinate) {
-                        Image(systemName: "location.north.fill")
-                            .font(.system(size: 21, weight: .bold)).foregroundStyle(.white)
-                            .frame(width: 38, height: 38).background(.blue, in: Circle())
-                            .overlay(Circle().stroke(.white, lineWidth: 2))
-                    }
-                    .annotationTitles(.hidden)
-                } else { UserAnnotation() }
+            Map(position: $camera, bounds: guidance.isActive
+                ? MapCameraBounds(minimumDistance: 250, maximumDistance: 1500) : nil) {
+                UserAnnotation()
                 if let destination {
                     Marker(item: destination).tint(.red)
                 }
@@ -79,6 +71,15 @@ struct ContentView: View {
                     .background(Color(red: 0.07, green: 0.10, blue: 0.17).opacity(0.96),
                                 in: RoundedRectangle(cornerRadius: 24))
                     Spacer()
+                    if camera.positionedByUser {
+                        Button { followUser() } label: {
+                            Image(systemName: "location.fill")
+                                .frame(width: 46, height: 46)
+                                .background(.regularMaterial, in: Circle())
+                        }
+                        .accessibilityLabel("恢复导航跟随")
+                        .frame(maxWidth: .infinity, alignment: .leading)
+                    }
                     let fraction = min(1, guidance.remainingDistance / max(1, route.distance))
                     let minutes = max(1, Int(ceil(route.expectedTravelTime * fraction / 60)))
                     HStack(spacing: 4) {
@@ -131,7 +132,6 @@ struct ContentView: View {
             }
             guard guidance.isActive else { return }
             guidance.update(fix)
-            if guidance.isActive { follow(fix) }
         }
         .onChange(of: guidance.needsReroute) { _, _ in
             guard guidance.isActive, let fix = locationService.location else { return }
@@ -145,10 +145,7 @@ struct ContentView: View {
         }
         .onChange(of: guidance.arrived) { _, arrived in
             if arrived {
-                routeTask?.cancel()
-                isRouting = false
-                locationService.setNavigating(false)
-                showRouteOverview()
+                stopNavigation()
             }
         }
         .alert("提示", isPresented: Binding(
@@ -179,22 +176,14 @@ struct ContentView: View {
         return "signpost.right.fill"
     }
 
-    private func follow(_ fix: CLLocation) {
-        if fix.course >= 0, fix.speed >= 1.5 { course = fix.course }
-        let heading = course ?? 0
-        var center = MKMapPoint(fix.coordinate)
-        if course != nil {
-            let offset = 85 * MKMapPointsPerMeterAtLatitude(fix.coordinate.latitude)
-            let radians = heading * .pi / 180
-            center.x += sin(radians) * offset
-            center.y -= cos(radians) * offset
+    private func followUser() {
+        let fallback: MapCameraPosition
+        if let fix = locationService.location {
+            fallback = .camera(MapCamera(centerCoordinate: fix.coordinate, distance: 700))
+        } else {
+            fallback = .automatic
         }
-        camera = .camera(MapCamera(centerCoordinate: center.coordinate, distance: 650,
-                                   heading: heading, pitch: 40))
-    }
-
-    private func showRouteOverview() {
-        if let selectedRoute { camera = .rect(selectedRoute.polyline.boundingMapRect) }
+        camera = .userLocation(followsHeading: true, fallback: fallback)
     }
 
     private var searchBar: some View {
@@ -202,16 +191,15 @@ struct ContentView: View {
             Image(systemName: "magnifyingglass").foregroundStyle(.secondary)
             TextField("搜索地点或地址", text: $query)
                 .focused($searchFocused)
+                .onChange(of: query) { _, value in
+                    if value.isEmpty && (destination != nil || isSearching || showingResults) { stopNavigation() }
+                }
                 .submitLabel(.search)
                 .onSubmit(search)
                 .accessibilityIdentifier("mapx.search")
             if !query.isEmpty {
                 Button {
-                    searchTask?.cancel()
-                    isSearching = false
-                    query = ""
-                    searchResults = []
-                    showingResults = false
+                    stopNavigation()
                 } label: {
                     Image(systemName: "xmark.circle.fill")
                         .foregroundStyle(.secondary)
@@ -354,9 +342,6 @@ struct ContentView: View {
     private func select(_ item: MKMapItem) {
         dismissKeyboard()
         stopNavigation()
-        routeTask?.cancel()
-        searchTask?.cancel()
-        isSearching = false
         destination = item
         routes = []
         selectedRouteIndex = 0
@@ -429,20 +414,28 @@ struct ContentView: View {
         }
         dismissKeyboard()
         showingResults = false
-        course = nil
+        followUser()
         guidance.start(selectedRoute)
         locationService.setNavigating(true)
         if let fix = locationService.location {
             guidance.update(fix)
-            if guidance.isActive { follow(fix) }
         }
     }
 
     private func stopNavigation() {
         routeTask?.cancel()
         isRouting = false
-        if guidance.isActive { showRouteOverview() }
-        guidance.stop()
+        searchTask?.cancel()
+        isSearching = false
+        if guidance.isActive { guidance.stop() }
+        destination = nil
+        routes = []
+        selectedRouteIndex = 0
+        query = ""
+        searchResults = []
+        showingResults = false
+        errorMessage = nil
+        camera = .userLocation(fallback: .automatic)
         locationService.setNavigating(false)
     }
 }
