@@ -33,6 +33,7 @@ jobs:
           test -d "$APP"
           /usr/libexec/PlistBuddy -c "Print :UILaunchScreen" "$APP/Info.plist"
           plutil -lint "$APP/Info.plist"
+          test "$(/usr/libexec/PlistBuddy -c 'Print :CFBundleVersion' "$APP/Info.plist")" = "6"
           /usr/libexec/PlistBuddy -c "Print :UIBackgroundModes" "$APP/Info.plist" | grep -q location
           /usr/libexec/PlistBuddy -c "Print :UIBackgroundModes" "$APP/Info.plist" | grep -q audio
           mkdir -p "$RUNNER_TEMP/MapXPackage/Payload"
