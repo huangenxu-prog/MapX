@@ -24,6 +24,8 @@ struct ContentView: View {
     @State private var hasCenteredOnUser = false
     @State private var visibleMapDistance: CLLocationDistance = 8_000
     @State private var repeatedLocateDistance: CLLocationDistance?
+    @State private var locateZoomLimit: CLLocationDistance?
+    @State private var zoomLimitTask: Task<Void, Never>?
     @State private var pendingLocate = false
     @State private var followRecoveryTask: Task<Void, Never>?
     @FocusState private var searchFocused: Bool
@@ -32,10 +34,21 @@ struct ContentView: View {
         routes.indices.contains(selectedRouteIndex) ? routes[selectedRouteIndex] : nil
     }
 
+    private var mapCameraBounds: MapCameraBounds? {
+        if guidance.isActive {
+            return MapCameraBounds(minimumDistance: 250, maximumDistance: 1500)
+        }
+        // A brief zoom cap lets MapKit itself follow its blue user annotation
+        // instead of centering a raw CoreLocation coordinate on Chinese map tiles.
+        if let limit = locateZoomLimit {
+            return MapCameraBounds(minimumDistance: 25, maximumDistance: max(35, limit))
+        }
+        return nil
+    }
+
     var body: some View {
         ZStack {
-            Map(position: $camera, bounds: guidance.isActive
-                ? MapCameraBounds(minimumDistance: 250, maximumDistance: 1500) : nil) {
+            Map(position: $camera, bounds: mapCameraBounds) {
                 UserAnnotation()
                 if let destination {
                     Marker(item: destination).tint(.red)
@@ -171,12 +184,10 @@ struct ContentView: View {
             if pendingLocate {
                 pendingLocate = false
                 hasCenteredOnUser = true
-                zoomToCurrentLocation(fix)
+                zoomToMapKitUserLocation()
             } else if !hasCenteredOnUser {
                 hasCenteredOnUser = true
-                camera = .region(MKCoordinateRegion(center: fix.coordinate,
-                                                     latitudinalMeters: 8000,
-                                                     longitudinalMeters: 8000))
+                camera = .userLocation(followsHeading: false, fallback: .automatic)
             }
         }
         .onChange(of: camera.positionedByUser) { _, movedByUser in
@@ -233,13 +244,10 @@ struct ContentView: View {
 
     private func followUser() {
         followRecoveryTask?.cancel()
-        let fallback: MapCameraPosition
-        if let fix = locationService.location {
-            fallback = .camera(MapCamera(centerCoordinate: fix.coordinate, distance: 700))
-        } else {
-            fallback = .automatic
-        }
-        camera = .userLocation(followsHeading: true, fallback: fallback)
+        // The native MapKit location is the reference for centering. Do not use
+        // the separately delivered raw CoreLocation coordinate as a fallback:
+        // in mainland China their datum may not match the displayed base map.
+        camera = .userLocation(followsHeading: true, fallback: .automatic)
     }
 
     private func scheduleFollowRecovery() {
@@ -271,20 +279,27 @@ struct ContentView: View {
             locationService.requestLocation()
             return
         }
-        zoomToCurrentLocation(fix)
+        zoomToMapKitUserLocation()
     }
 
-    private func zoomToCurrentLocation(_ fix: CLLocation) {
-        // Keep the last button-selected zoom even if the user taps faster than
-        // the camera animation can finish. Manual map gestures reset this value.
+    private func zoomToMapKitUserLocation() {
+        // Zoom the *native MapKit user location* (same source as UserAnnotation)
+        // instead of constructing a camera from raw CLLocation coordinates.
+        // The temporary camera bound preserves the existing repeated-tap zoom.
         let startingDistance = repeatedLocateDistance ?? visibleMapDistance
         let nextDistance = max(35, min(startingDistance, 12_000) * 0.65)
         repeatedLocateDistance = nextDistance
+        zoomLimitTask?.cancel()
         withAnimation(.easeInOut(duration: 0.25)) {
-            camera = .camera(MapCamera(centerCoordinate: fix.coordinate,
-                                       distance: nextDistance,
-                                       heading: 0,
-                                       pitch: 0))
+            locateZoomLimit = nextDistance
+            camera = .userLocation(followsHeading: false, fallback: .automatic)
+        }
+        zoomLimitTask = Task { @MainActor in
+            do {
+                try await Task.sleep(for: .milliseconds(700))
+            } catch { return }
+            guard !Task.isCancelled else { return }
+            locateZoomLimit = nil
         }
     }
 
@@ -489,8 +504,8 @@ struct ContentView: View {
             defer { if !Task.isCancelled { isSearching = false } }
             do {
                 let request = MKLocalSearch.Request()
-                if let fix = locationService.location {
-                    request.region = MKCoordinateRegion(center: fix.coordinate, latitudinalMeters: 40000, longitudinalMeters: 40000)
+                if let mapRegion = camera.region {
+                    request.region = mapRegion
                 }
                 request.naturalLanguageQuery = term
                 let response = try await MKLocalSearch(request: request).start()
@@ -529,11 +544,7 @@ struct ContentView: View {
             isRouting = true
             defer { if !Task.isCancelled { isRouting = false } }
             let request = MKDirections.Request()
-            if let fix {
-                request.source = MKMapItem(placemark: MKPlacemark(coordinate: fix.coordinate))
-            } else {
-                request.source = .forCurrentLocation()
-            }
+            request.source = .forCurrentLocation()
             request.destination = destination
             request.transportType = .automobile
             request.requestsAlternateRoutes = true
@@ -600,6 +611,8 @@ struct ContentView: View {
         followRecoveryTask?.cancel()
         pendingLocate = false
         repeatedLocateDistance = nil
+        zoomLimitTask?.cancel()
+        locateZoomLimit = nil
         routeTask?.cancel()
         isRouting = false
         searchTask?.cancel()
