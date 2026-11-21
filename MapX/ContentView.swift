@@ -20,6 +20,7 @@ struct ContentView: View {
     @State private var isRouting = false
     @State private var errorMessage: String?
     @State private var hasCenteredOnUser = false
+    @State private var course: Double?
     @FocusState private var searchFocused: Bool
 
     private var selectedRoute: MKRoute? {
@@ -28,13 +29,24 @@ struct ContentView: View {
 
     var body: some View {
         ZStack {
-            Map(position: $camera) {
-                UserAnnotation()
+            Map(position: $camera, interactionModes: guidance.isActive ? [] : .all) {
+                if guidance.isActive, let fix = locationService.location, course != nil {
+                    Annotation("当前位置", coordinate: fix.coordinate) {
+                        Image(systemName: "location.north.fill")
+                            .font(.system(size: 21, weight: .bold)).foregroundStyle(.white)
+                            .frame(width: 38, height: 38).background(.blue, in: Circle())
+                            .overlay(Circle().stroke(.white, lineWidth: 2))
+                    }
+                    .annotationTitles(.hidden)
+                } else { UserAnnotation() }
                 if let destination {
                     Marker(item: destination).tint(.red)
                 }
                 ForEach(routes.indices, id: \.self) { index in
                     if !guidance.isActive || index == selectedRouteIndex {
+                    if guidance.isActive {
+                        MapPolyline(routes[index].polyline).stroke(.white.opacity(0.82), lineWidth: 10)
+                    }
                     MapPolyline(routes[index].polyline)
                         .stroke(index == selectedRouteIndex ? Color.blue : Color.gray.opacity(0.5),
                                 lineWidth: index == selectedRouteIndex ? 7 : 4)
@@ -50,26 +62,40 @@ struct ContentView: View {
 
             VStack(spacing: 12) {
                 if guidance.isActive, let route = selectedRoute {
-                    HStack {
+                    HStack(spacing: 16) {
+                        Image(systemName: maneuverSymbol)
+                            .font(.system(size: 35, weight: .bold))
+                            .accessibilityHidden(true)
                         VStack(alignment: .leading, spacing: 3) {
-                            Text(formattedDistance(guidance.distanceToTurn)).font(.headline)
-                            Text(guidance.nextInstruction).lineLimit(2)
+                            Text(formattedDistance(guidance.distanceToTurn))
+                                .font(.title.bold()).monospacedDigit()
+                            Text(guidance.nextInstruction)
+                                .font(.headline).lineLimit(3)
                         }
-                        Spacer()
+                        Spacer(minLength: 0)
                     }
-                    .padding(12)
-                    .background(.regularMaterial, in: RoundedRectangle(cornerRadius: 16))
+                    .padding(16)
+                    .foregroundStyle(.white)
+                    .background(Color(red: 0.07, green: 0.10, blue: 0.17).opacity(0.96),
+                                in: RoundedRectangle(cornerRadius: 24))
                     Spacer()
-                    HStack {
-                        let fraction = min(1, guidance.remainingDistance / max(1, route.distance))
-                        Text("约 \(max(1, Int(ceil(route.expectedTravelTime * fraction / 60)))) 分钟")
-                            .font(.headline)
-                        Text(formattedDistance(guidance.remainingDistance))
-                        Spacer()
-                        Button("结束导航") { stopNavigation() }
+                    let fraction = min(1, guidance.remainingDistance / max(1, route.distance))
+                    let minutes = max(1, Int(ceil(route.expectedTravelTime * fraction / 60)))
+                    HStack(spacing: 4) {
+                        metric(Date.now.addingTimeInterval(Double(minutes) * 60)
+                            .formatted(date: .omitted, time: .shortened), "到达")
+                        metric(String(minutes), "分钟")
+                        metric(String(format: "%.1f", guidance.remainingDistance / 1000), "公里")
+                        Button { stopNavigation() } label: {
+                            Image(systemName: "xmark").font(.headline)
+                                .frame(width: 44, height: 44)
+                                .background(.white.opacity(0.14), in: Circle())
+                        }
+                        .accessibilityLabel("结束导航")
                     }
                     .padding(12)
-                    .background(.regularMaterial, in: RoundedRectangle(cornerRadius: 16))
+                    .foregroundStyle(.white)
+                    .background(.ultraThinMaterial, in: RoundedRectangle(cornerRadius: 24))
                 } else {
                     searchBar
                     if showingResults { searchResultsView }
@@ -91,6 +117,7 @@ struct ContentView: View {
                     .background(.regularMaterial, in: RoundedRectangle(cornerRadius: 16))
             }
         }
+        .preferredColorScheme(guidance.isActive ? .dark : nil)
         .tint(.blue)
         .onAppear {
             locationService.requestLocation()
@@ -104,11 +131,7 @@ struct ContentView: View {
             }
             guard guidance.isActive else { return }
             guidance.update(fix)
-            let heading = fix.course >= 0 ? fix.course : 0
-            camera = .camera(MapCamera(centerCoordinate: fix.coordinate,
-                                       distance: 750,
-                                       heading: heading,
-                                       pitch: 40))
+            if guidance.isActive { follow(fix) }
         }
         .onChange(of: guidance.needsReroute) { _, _ in
             guard guidance.isActive, let fix = locationService.location else { return }
@@ -125,6 +148,7 @@ struct ContentView: View {
                 routeTask?.cancel()
                 isRouting = false
                 locationService.setNavigating(false)
+                showRouteOverview()
             }
         }
         .alert("提示", isPresented: Binding(
@@ -135,6 +159,42 @@ struct ContentView: View {
         } message: {
             Text(errorMessage ?? "")
         }
+    }
+
+    private func metric(_ value: String, _ label: String) -> some View {
+        VStack(spacing: 2) {
+            Text(value).font(.title2.bold()).monospacedDigit()
+                .lineLimit(1).minimumScaleFactor(0.7)
+            Text(label).font(.caption).foregroundStyle(.secondary)
+        }
+        .frame(maxWidth: .infinity)
+    }
+
+    private var maneuverSymbol: String {
+        let instruction = guidance.nextInstruction.lowercased()
+        if instruction.contains("掉头") || instruction.contains("调头") || instruction.contains("u-turn") { return "arrow.uturn.backward" }
+        if instruction.contains("左转") || instruction.contains("turn left") { return "arrow.turn.up.left" }
+        if instruction.contains("右转") || instruction.contains("turn right") { return "arrow.turn.up.right" }
+        if instruction.contains("直行") || instruction.contains("straight") { return "arrow.up" }
+        return "signpost.right.fill"
+    }
+
+    private func follow(_ fix: CLLocation) {
+        if fix.course >= 0, fix.speed >= 1.5 { course = fix.course }
+        let heading = course ?? 0
+        var center = MKMapPoint(fix.coordinate)
+        if course != nil {
+            let offset = 85 * MKMapPointsPerMeterAtLatitude(fix.coordinate.latitude)
+            let radians = heading * .pi / 180
+            center.x += sin(radians) * offset
+            center.y -= cos(radians) * offset
+        }
+        camera = .camera(MapCamera(centerCoordinate: center.coordinate, distance: 650,
+                                   heading: heading, pitch: 40))
+    }
+
+    private func showRouteOverview() {
+        if let selectedRoute { camera = .rect(selectedRoute.polyline.boundingMapRect) }
     }
 
     private var searchBar: some View {
@@ -369,20 +429,19 @@ struct ContentView: View {
         }
         dismissKeyboard()
         showingResults = false
+        course = nil
         guidance.start(selectedRoute)
         locationService.setNavigating(true)
         if let fix = locationService.location {
             guidance.update(fix)
-            camera = .camera(MapCamera(centerCoordinate: fix.coordinate,
-                                       distance: 750,
-                                       heading: fix.course >= 0 ? fix.course : 0,
-                                       pitch: 40))
+            if guidance.isActive { follow(fix) }
         }
     }
 
     private func stopNavigation() {
         routeTask?.cancel()
         isRouting = false
+        if guidance.isActive { showRouteOverview() }
         guidance.stop()
         locationService.setNavigating(false)
     }
