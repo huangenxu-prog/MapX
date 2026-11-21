@@ -18,6 +18,8 @@ struct ContentView: View {
     @State private var isSearching = false
     @State private var isRouting = false
     @State private var errorMessage: String?
+    @State private var hasCenteredOnUser = false
+    @FocusState private var searchFocused: Bool
 
     private var selectedRoute: MKRoute? {
         routes.indices.contains(selectedRouteIndex) ? routes[selectedRouteIndex] : nil
@@ -76,6 +78,12 @@ struct ContentView: View {
             locationService.requestLocation()
         }
         .onReceive(locationService.$location.compactMap { $0 }) { fix in
+            if !hasCenteredOnUser {
+                hasCenteredOnUser = true
+                camera = .region(MKCoordinateRegion(center: fix.coordinate,
+                                                     latitudinalMeters: 8000,
+                                                     longitudinalMeters: 8000))
+            }
             guard guidance.isActive else { return }
             guidance.update(fix)
             let heading = fix.course >= 0 ? fix.course : 0
@@ -105,6 +113,7 @@ struct ContentView: View {
         HStack(spacing: 12) {
             Image(systemName: "magnifyingglass").foregroundStyle(.secondary)
             TextField("搜索地点或地址", text: $query)
+                .focused($searchFocused)
                 .submitLabel(.search)
                 .onSubmit(search)
                 .accessibilityIdentifier("mapx.search")
@@ -246,6 +255,7 @@ struct ContentView: View {
     }
 
     private func search() {
+        searchFocused = false
         let term = query.trimmingCharacters(in: .whitespacesAndNewlines)
         guard !term.isEmpty else { return }
         searchTask?.cancel()
@@ -270,6 +280,7 @@ struct ContentView: View {
     }
 
     private func select(_ item: MKMapItem) {
+        searchFocused = false
         stopNavigation()
         routeTask?.cancel()
         destination = item
@@ -330,8 +341,16 @@ struct ContentView: View {
     }
 
     private func switchRoadLevel(_ level: RoadLevel) {
-        guard let index = routes.indices.first(where: { RoadLevelEvidence.matches(routes[$0], level: level) }) else {
+        let opposite: RoadLevel = level == .upper ? .lower : .upper
+        guard let index = routes.indices.first(where: {
+            RoadLevelEvidence.matches(routes[$0], level: level) &&
+            !RoadLevelEvidence.matches(routes[$0], level: opposite)
+        }) else {
             errorMessage = "当前地图服务没有提供可确认的「\(level.rawValue)」路线。MapKit 无法直接校正桥梁层级，请按实际道路和交通标志行驶。"
+            return
+        }
+        if index == selectedRouteIndex {
+            errorMessage = "当前路线已有「\(level.rawValue)」相关道路提示，路线未发生变化。"
             return
         }
         chooseRoute(index)
@@ -353,6 +372,10 @@ struct ContentView: View {
         locationService.setNavigating(true)
         if let fix = locationService.location {
             guidance.update(fix)
+            camera = .camera(MapCamera(centerCoordinate: fix.coordinate,
+                                       distance: 750,
+                                       heading: fix.course >= 0 ? fix.course : 0,
+                                       pitch: 40))
         }
     }
 
