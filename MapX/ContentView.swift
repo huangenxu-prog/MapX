@@ -20,6 +20,9 @@ struct ContentView: View {
     @State private var isRouting = false
     @State private var errorMessage: String?
     @State private var hasCenteredOnUser = false
+    @State private var visibleMapDistance: CLLocationDistance = 8_000
+    @State private var repeatedLocateDistance: CLLocationDistance?
+    @State private var pendingLocate = false
     @FocusState private var searchFocused: Bool
 
     private var selectedRoute: MKRoute? {
@@ -46,6 +49,12 @@ struct ContentView: View {
                 }
             }
             .mapStyle(.standard(elevation: .flat))
+            .onMapCameraChange(frequency: .onEnd) { context in
+                let distance = context.camera.distance
+                if distance.isFinite && distance > 0 {
+                    visibleMapDistance = distance
+                }
+            }
             .mapControls {
                 MapCompass()
                 MapScaleView()
@@ -124,7 +133,11 @@ struct ContentView: View {
             locationService.requestLocation()
         }
         .onReceive(locationService.$location.compactMap { $0 }) { fix in
-            if !hasCenteredOnUser {
+            if pendingLocate {
+                pendingLocate = false
+                hasCenteredOnUser = true
+                zoomToCurrentLocation(fix)
+            } else if !hasCenteredOnUser {
                 hasCenteredOnUser = true
                 camera = .region(MKCoordinateRegion(center: fix.coordinate,
                                                      latitudinalMeters: 8000,
@@ -132,6 +145,9 @@ struct ContentView: View {
             }
             guard guidance.isActive else { return }
             guidance.update(fix)
+        }
+        .onChange(of: camera.positionedByUser) { _, movedByUser in
+            if movedByUser { repeatedLocateDistance = nil }
         }
         .onChange(of: guidance.needsReroute) { _, _ in
             guard guidance.isActive, let fix = locationService.location else { return }
@@ -184,6 +200,38 @@ struct ContentView: View {
             fallback = .automatic
         }
         camera = .userLocation(followsHeading: true, fallback: fallback)
+    }
+
+    private func locateAndZoom() {
+        guard locationService.isAuthorized else {
+            if locationService.authorizationStatus == .notDetermined {
+                pendingLocate = true
+                locationService.requestLocation()
+            } else {
+                errorMessage = "请在系统设置中允许 MapX 使用定位。"
+            }
+            return
+        }
+        guard let fix = locationService.location else {
+            pendingLocate = true
+            locationService.requestLocation()
+            return
+        }
+        zoomToCurrentLocation(fix)
+    }
+
+    private func zoomToCurrentLocation(_ fix: CLLocation) {
+        // Keep the last button-selected zoom even if the user taps faster than
+        // the camera animation can finish. Manual map gestures reset this value.
+        let startingDistance = repeatedLocateDistance ?? visibleMapDistance
+        let nextDistance = max(35, min(startingDistance, 12_000) * 0.65)
+        repeatedLocateDistance = nextDistance
+        withAnimation(.easeInOut(duration: 0.25)) {
+            camera = .camera(MapCamera(centerCoordinate: fix.coordinate,
+                                       distance: nextDistance,
+                                       heading: 0,
+                                       pitch: 0))
+        }
     }
 
     private var searchBar: some View {
@@ -241,14 +289,7 @@ struct ContentView: View {
     }
 
     private var locateButton: some View {
-        Button {
-            locationService.requestLocation()
-            if locationService.isAuthorized {
-                camera = .userLocation(fallback: .automatic)
-            } else {
-                errorMessage = "请在系统设置中允许 MapX 使用定位。"
-            }
-        } label: {
+        Button(action: locateAndZoom) {
             Image(systemName: "location.fill")
                 .font(.title3)
                 .foregroundStyle(.blue)
@@ -256,7 +297,7 @@ struct ContentView: View {
                 .background(.regularMaterial, in: Circle())
                 .shadow(color: .black.opacity(0.09), radius: 8, y: 3)
         }
-        .accessibilityLabel("回到当前位置")
+        .accessibilityLabel("定位并放大")
     }
 
     private func routePanel(_ route: MKRoute) -> some View {
@@ -340,6 +381,7 @@ struct ContentView: View {
     }
 
     private func select(_ item: MKMapItem) {
+        repeatedLocateDistance = nil
         dismissKeyboard()
         stopNavigation()
         destination = item
@@ -393,6 +435,7 @@ struct ContentView: View {
     }
 
     private func chooseRoute(_ index: Int) {
+        repeatedLocateDistance = nil
         guard routes.indices.contains(index) else { return }
         selectedRouteIndex = index
         camera = .rect(routes[index].polyline.boundingMapRect)
@@ -423,6 +466,8 @@ struct ContentView: View {
     }
 
     private func stopNavigation() {
+        pendingLocate = false
+        repeatedLocateDistance = nil
         routeTask?.cancel()
         isRouting = false
         searchTask?.cancel()
