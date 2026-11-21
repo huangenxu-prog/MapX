@@ -7,6 +7,8 @@ settings:
   base:
     SWIFT_VERSION: "5.9"
     TARGETED_DEVICE_FAMILY: "1"
+    MARKETING_VERSION: "0.2.0"
+    CURRENT_PROJECT_VERSION: "2"
 targets:
   MapX:
     type: application
@@ -17,6 +19,7 @@ targets:
       base:
         PRODUCT_BUNDLE_IDENTIFIER: com.huangenxu.MapX
         GENERATE_INFOPLIST_FILE: YES
-        INFOPLIST_KEY_NSLocationWhenInUseUsageDescription: "MapX uses your location to show your position and plan routes."
+        INFOPLIST_KEY_CFBundleDisplayName: MapX
+        INFOPLIST_KEY_NSLocationWhenInUseUsageDescription: "MapX 使用当前位置以规划路线和在导航时显示行驶位置。"
         INFOPLIST_KEY_UIApplicationSceneManifest_Generation: YES
         CODE_SIGNING_ALLOWED: NO
