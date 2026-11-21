@@ -3,6 +3,7 @@ on:
   push:
     branches: [main]
   workflow_dispatch:
+
 jobs:
   build:
     runs-on: macos-15
@@ -14,4 +15,28 @@ jobs:
         run: xcodegen generate
       - name: Build for iOS Simulator
         run: |
-          xcodebuild -project MapX.xcodeproj -scheme MapX -configuration Debug -sdk iphonesimulator -destination 'generic/platform=iOS Simulator' CODE_SIGNING_ALLOWED=NO build
+          set -euo pipefail
+          xcodebuild -project MapX.xcodeproj -scheme MapX \
+            -configuration Debug -sdk iphonesimulator \
+            -destination 'generic/platform=iOS Simulator' \
+            -derivedDataPath "$RUNNER_TEMP/MapXSimulator" \
+            CODE_SIGNING_ALLOWED=NO build
+      - name: Build unsigned iPhone app
+        run: |
+          set -euo pipefail
+          xcodebuild -project MapX.xcodeproj -scheme MapX \
+            -configuration Release -sdk iphoneos \
+            -destination 'generic/platform=iOS' \
+            -derivedDataPath "$RUNNER_TEMP/MapXDevice" \
+            CODE_SIGNING_ALLOWED=NO build
+          APP="$RUNNER_TEMP/MapXDevice/Build/Products/Release-iphoneos/MapX.app"
+          test -d "$APP"
+          mkdir -p "$RUNNER_TEMP/MapXPackage/Payload"
+          cp -R "$APP" "$RUNNER_TEMP/MapXPackage/Payload/MapX.app"
+          (cd "$RUNNER_TEMP/MapXPackage" && zip -qry "$GITHUB_WORKSPACE/MapX-unsigned.ipa" Payload)
+      - uses: actions/upload-artifact@v4
+        with:
+          name: MapX-unsigned-ipa
+          path: MapX-unsigned.ipa
+          if-no-files-found: error
+          retention-days: 14
