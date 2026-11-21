@@ -51,15 +51,15 @@ final class NavigationSession: ObservableObject {
 
         if progress.remainingDistance < 35, progress.distanceFromRoute < 45 {
             arrived = true
-            speak("已到达目的地附近")
             stop()
+            speak("已到达目的地附近")
             return
         }
 
         if let stepIndex = progress.nextStepIndex {
             let text = route.steps[stepIndex].instructions
             nextInstruction = text
-            if progress.distanceToNextTurn < 400 {
+            if (90..<400).contains(progress.distanceToNextTurn) {
                 speakOnce("approach-\(stepIndex)", text: "前方\(Int(progress.distanceToNextTurn))米，\(text)")
             }
             if progress.distanceToNextTurn < 90 {

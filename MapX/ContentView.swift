@@ -1,3 +1,4 @@
+import UIKit
 import SwiftUI
 import MapKit
 import CoreLocation
@@ -33,9 +34,11 @@ struct ContentView: View {
                     Marker(item: destination).tint(.red)
                 }
                 ForEach(routes.indices, id: \.self) { index in
+                    if !guidance.isActive || index == selectedRouteIndex {
                     MapPolyline(routes[index].polyline)
                         .stroke(index == selectedRouteIndex ? Color.blue : Color.gray.opacity(0.5),
                                 lineWidth: index == selectedRouteIndex ? 7 : 4)
+                    }
                 }
             }
             .mapStyle(.standard(elevation: .flat))
@@ -46,21 +49,36 @@ struct ContentView: View {
             .ignoresSafeArea()
 
             VStack(spacing: 12) {
-                searchBar
-
-                if showingResults {
-                    searchResultsView
-                }
-
-                Spacer(minLength: 12)
-
-                HStack(alignment: .bottom, spacing: 12) {
-                    if let selectedRoute {
-                        routePanel(selectedRoute)
-                    } else {
-                        Spacer(minLength: 0)
+                if guidance.isActive, let route = selectedRoute {
+                    HStack {
+                        VStack(alignment: .leading, spacing: 3) {
+                            Text(formattedDistance(guidance.distanceToTurn)).font(.headline)
+                            Text(guidance.nextInstruction).lineLimit(2)
+                        }
+                        Spacer()
                     }
-                    locateButton
+                    .padding(12)
+                    .background(.regularMaterial, in: RoundedRectangle(cornerRadius: 16))
+                    Spacer()
+                    HStack {
+                        let fraction = min(1, guidance.remainingDistance / max(1, route.distance))
+                        Text("约 \(max(1, Int(ceil(route.expectedTravelTime * fraction / 60)))) 分钟")
+                            .font(.headline)
+                        Text(formattedDistance(guidance.remainingDistance))
+                        Spacer()
+                        Button("结束导航") { stopNavigation() }
+                    }
+                    .padding(12)
+                    .background(.regularMaterial, in: RoundedRectangle(cornerRadius: 16))
+                } else {
+                    searchBar
+                    if showingResults { searchResultsView }
+                    Spacer(minLength: 12)
+                    HStack(alignment: .bottom, spacing: 12) {
+                        if let selectedRoute { routePanel(selectedRoute) }
+                        else { Spacer(minLength: 0) }
+                        locateButton
+                    }
                 }
             }
             .padding(.horizontal, 16)
@@ -96,8 +114,18 @@ struct ContentView: View {
             guard guidance.isActive, let fix = locationService.location else { return }
             planRoute(from: fix, continueNavigation: true)
         }
+        .onChange(of: locationService.authorizationStatus) { _, status in
+            if guidance.isActive && (status == .denied || status == .restricted) {
+                stopNavigation()
+                errorMessage = "定位权限已关闭，导航已结束。"
+            }
+        }
         .onChange(of: guidance.arrived) { _, arrived in
-            if arrived { locationService.setNavigating(false) }
+            if arrived {
+                routeTask?.cancel()
+                isRouting = false
+                locationService.setNavigating(false)
+            }
         }
         .alert("提示", isPresented: Binding(
             get: { errorMessage != nil },
@@ -119,6 +147,8 @@ struct ContentView: View {
                 .accessibilityIdentifier("mapx.search")
             if !query.isEmpty {
                 Button {
+                    searchTask?.cancel()
+                    isSearching = false
                     query = ""
                     searchResults = []
                     showingResults = false
@@ -183,21 +213,12 @@ struct ContentView: View {
 
     private func routePanel(_ route: MKRoute) -> some View {
         VStack(alignment: .leading, spacing: 12) {
-            if guidance.isActive {
-                Text(guidance.nextInstruction)
-                    .font(.headline)
-                    .lineLimit(3)
-                Text("\(formattedDistance(guidance.distanceToTurn)) 后 · 剩余 \(formattedDistance(guidance.remainingDistance))")
-                    .font(.subheadline)
-                    .foregroundStyle(.secondary)
-            } else {
                 Text(destination?.name ?? "目的地")
                     .font(.headline)
                     .lineLimit(1)
                 Text("\(Int((route.expectedTravelTime / 60).rounded())) 分钟 · \(formattedDistance(route.distance))")
                     .font(.subheadline)
                     .foregroundStyle(.secondary)
-            }
 
             if routes.count > 1 {
                 HStack(spacing: 8) {
@@ -215,23 +236,6 @@ struct ContentView: View {
                 }
             }
 
-            HStack(spacing: 8) {
-                Button("桥上") { switchRoadLevel(.upper) }
-                Button("桥下") { switchRoadLevel(.lower) }
-            }
-            .buttonStyle(.bordered)
-            .font(.subheadline)
-
-            Text("桥上/桥下仅在备选路线有明确道路提示时可切换")
-                .font(.caption2)
-                .foregroundStyle(.secondary)
-                .fixedSize(horizontal: false, vertical: true)
-
-            if guidance.isActive {
-                Button("结束导航") { stopNavigation() }
-                    .buttonStyle(.bordered)
-                    .frame(maxWidth: .infinity)
-            } else {
                 Button {
                     startNavigation()
                 } label: {
@@ -241,7 +245,6 @@ struct ContentView: View {
                 }
                 .buttonStyle(.borderedProminent)
                 .accessibilityIdentifier("mapx.startNavigation")
-            }
         }
         .padding(16)
         .frame(maxWidth: .infinity, alignment: .leading)
@@ -254,16 +257,25 @@ struct ContentView: View {
         return "\(Int(max(0, meters).rounded())) 米"
     }
 
-    private func search() {
+    private func dismissKeyboard() {
         searchFocused = false
+        UIApplication.shared.sendAction(#selector(UIResponder.resignFirstResponder),
+                                        to: nil, from: nil, for: nil)
+    }
+
+    private func search() {
+        dismissKeyboard()
         let term = query.trimmingCharacters(in: .whitespacesAndNewlines)
         guard !term.isEmpty else { return }
         searchTask?.cancel()
         searchTask = Task {
             isSearching = true
-            defer { isSearching = false }
+            defer { if !Task.isCancelled { isSearching = false } }
             do {
                 let request = MKLocalSearch.Request()
+                if let fix = locationService.location {
+                    request.region = MKCoordinateRegion(center: fix.coordinate, latitudinalMeters: 40000, longitudinalMeters: 40000)
+                }
                 request.naturalLanguageQuery = term
                 let response = try await MKLocalSearch(request: request).start()
                 guard !Task.isCancelled else { return }
@@ -280,9 +292,11 @@ struct ContentView: View {
     }
 
     private func select(_ item: MKMapItem) {
-        searchFocused = false
+        dismissKeyboard()
         stopNavigation()
         routeTask?.cancel()
+        searchTask?.cancel()
+        isSearching = false
         destination = item
         routes = []
         selectedRouteIndex = 0
@@ -299,7 +313,7 @@ struct ContentView: View {
         routeTask?.cancel()
         routeTask = Task {
             isRouting = true
-            defer { isRouting = false }
+            defer { if !Task.isCancelled { isRouting = false } }
             let request = MKDirections.Request()
             if let fix {
                 request.source = MKMapItem(placemark: MKPlacemark(coordinate: fix.coordinate))
@@ -320,7 +334,9 @@ struct ContentView: View {
                 routes = response.routes
                 selectedRouteIndex = 0
                 if continueNavigation {
+                    guard guidance.isActive else { return }
                     guidance.start(response.routes[0])
+                    if let fix = locationService.location { guidance.update(fix) }
                 } else {
                     camera = .rect(response.routes[0].polyline.boundingMapRect)
                 }
@@ -340,22 +356,6 @@ struct ContentView: View {
         }
     }
 
-    private func switchRoadLevel(_ level: RoadLevel) {
-        let opposite: RoadLevel = level == .upper ? .lower : .upper
-        guard let index = routes.indices.first(where: {
-            RoadLevelEvidence.matches(routes[$0], level: level) &&
-            !RoadLevelEvidence.matches(routes[$0], level: opposite)
-        }) else {
-            errorMessage = "当前地图服务没有提供可确认的「\(level.rawValue)」路线。MapKit 无法直接校正桥梁层级，请按实际道路和交通标志行驶。"
-            return
-        }
-        if index == selectedRouteIndex {
-            errorMessage = "当前路线已有「\(level.rawValue)」相关道路提示，路线未发生变化。"
-            return
-        }
-        chooseRoute(index)
-    }
-
     private func startNavigation() {
         guard let selectedRoute else { return }
         guard locationService.isAuthorized else {
@@ -367,6 +367,7 @@ struct ContentView: View {
             errorMessage = "尚未获得 GPS 位置，请稍后重试。"
             return
         }
+        dismissKeyboard()
         showingResults = false
         guidance.start(selectedRoute)
         locationService.setNavigating(true)
@@ -380,6 +381,8 @@ struct ContentView: View {
     }
 
     private func stopNavigation() {
+        routeTask?.cancel()
+        isRouting = false
         guidance.stop()
         locationService.setNavigating(false)
     }

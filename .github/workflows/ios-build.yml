@@ -31,6 +31,7 @@ jobs:
             CODE_SIGNING_ALLOWED=NO build
           APP="$RUNNER_TEMP/MapXDevice/Build/Products/Release-iphoneos/MapX.app"
           test -d "$APP"
+          /usr/libexec/PlistBuddy -c "Print :UILaunchScreen" "$APP/Info.plist"
           mkdir -p "$RUNNER_TEMP/MapXPackage/Payload"
           cp -R "$APP" "$RUNNER_TEMP/MapXPackage/Payload/MapX.app"
           (cd "$RUNNER_TEMP/MapXPackage" && zip -qry "$GITHUB_WORKSPACE/MapX-unsigned.ipa" Payload)

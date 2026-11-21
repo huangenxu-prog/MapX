@@ -20,14 +20,12 @@ enum RouteGeometry {
 
         var nextStep: Int?
         var turnDistance = remaining
+        var stepStart: Double = 0
         for (index, step) in route.steps.enumerated() {
-            guard !step.instructions.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty,
-                  step.polyline.pointCount > 0 else { continue }
-            let endpoint = step.polyline.points()[step.polyline.pointCount - 1]
-            let endProgress = project(endpoint, on: route.polyline).alongMeters
-            if endProgress > traveled + 12 {
+            defer { stepStart += step.distance }
+            if stepStart > traveled + 3, !step.instructions.isEmpty {
                 nextStep = index
-                turnDistance = max(0, endProgress - traveled)
+                turnDistance = stepStart - traveled
                 break
             }
         }
@@ -75,24 +73,5 @@ enum RouteGeometry {
             completed += segmentMeters
         }
         return (bestProgress, bestDistance)
-    }
-}
-
-/// Only explicit text in an alternative route can support a requested road-level switch.
-/// Absence of a bridge reference does not establish that a road is at ground level.
-enum RoadLevel: String, CaseIterable {
-    case upper = "桥上"
-    case lower = "桥下"
-}
-
-enum RoadLevelEvidence {
-    static func matches(_ route: MKRoute, level: RoadLevel) -> Bool {
-        let text = ([route.name] + route.steps.map(\.instructions)).joined(separator: " ").lowercased()
-        switch level {
-        case .upper:
-            return ["上高架", "高架桥", "桥面", "elevated", "viaduct", "flyover"].contains(where: text.contains)
-        case .lower:
-            return ["桥下", "地面道路", "地面辅路", "underpass", "surface road"].contains(where: text.contains)
-        }
     }
 }
