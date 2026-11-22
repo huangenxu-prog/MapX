@@ -24,8 +24,6 @@ struct ContentView: View {
     @State private var hasCenteredOnUser = false
     @State private var visibleMapDistance: CLLocationDistance = 8_000
     @State private var repeatedLocateDistance: CLLocationDistance?
-    @State private var locateZoomLimit: CLLocationDistance?
-    @State private var zoomLimitTask: Task<Void, Never>?
     @State private var pendingLocate = false
     @State private var exploring = false
     @State private var followRecoveryTask: Task<Void, Never>?
@@ -36,13 +34,8 @@ struct ContentView: View {
     }
 
     private var mapCameraBounds: MapCameraBounds? {
-        if guidance.isActive {
-            return MapCameraBounds(minimumDistance: 250, maximumDistance: 1500)
-        }
-        // A brief zoom cap lets MapKit itself follow its blue user annotation
-        // instead of centering a raw CoreLocation coordinate on Chinese map tiles.
-        if let limit = locateZoomLimit {
-            return MapCameraBounds(minimumDistance: 25, maximumDistance: max(35, limit))
+        if let limit = repeatedLocateDistance {
+            return MapCameraBounds(minimumDistance: 25, maximumDistance: limit)
         }
         return nil
     }
@@ -73,6 +66,9 @@ struct ContentView: View {
                     }
                 }
             }
+            .simultaneousGesture(MagnifyGesture().onChanged { _ in
+                repeatedLocateDistance = nil
+            })
             .mapStyle(.standard(elevation: .flat))
             .onMapCameraChange(frequency: .onEnd) { context in
                 let distance = context.camera.distance
@@ -277,7 +273,7 @@ struct ContentView: View {
             }
             return
         }
-        guard let fix = locationService.location else {
+        guard locationService.location != nil else {
             pendingLocate = true
             locationService.requestLocation()
             return
@@ -286,24 +282,13 @@ struct ContentView: View {
     }
 
     private func zoomToMapKitUserLocation() {
-        // Zoom the *native MapKit user location* (same source as UserAnnotation)
-        // instead of constructing a camera from raw CLLocation coordinates.
-        // The temporary camera bound preserves the existing repeated-tap zoom.
-        let startingDistance = repeatedLocateDistance ?? visibleMapDistance
-        let nextDistance = max(35, min(startingDistance, 12_000) * 0.65)
-        repeatedLocateDistance = nextDistance
-        zoomLimitTask?.cancel()
-        withAnimation(.easeInOut(duration: 0.25)) {
-            locateZoomLimit = nextDistance
+        // Keep the limit until a gesture or a route selection takes over the camera.
+        let distance = min(repeatedLocateDistance ?? visibleMapDistance, visibleMapDistance)
+        let nextDistance = min(distance, max(35, min(distance, 12_000) * 0.65))
+        if repeatedLocateDistance == nil {
             camera = .userLocation(followsHeading: false, fallback: .automatic)
         }
-        zoomLimitTask = Task { @MainActor in
-            do {
-                try await Task.sleep(for: .milliseconds(700))
-            } catch { return }
-            guard !Task.isCancelled else { return }
-            locateZoomLimit = nil
-        }
+        repeatedLocateDistance = nextDistance
     }
 
     private var searchBar: some View {
@@ -567,6 +552,7 @@ struct ContentView: View {
                                           destination: destination.placemark.coordinate)
                     if let fix = locationService.location { guidance.update(fix) }
                 } else {
+                    repeatedLocateDistance = nil
                     camera = .rect(response.routes[0].polyline.boundingMapRect)
                 }
             } catch {
@@ -614,8 +600,6 @@ struct ContentView: View {
         followRecoveryTask?.cancel()
         pendingLocate = false
         repeatedLocateDistance = nil
-        zoomLimitTask?.cancel()
-        locateZoomLimit = nil
         routeTask?.cancel()
         isRouting = false
         searchTask?.cancel()
