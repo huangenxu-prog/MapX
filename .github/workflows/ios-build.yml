@@ -1,7 +1,7 @@
 name: iOS Build
 on:
   push:
-    branches: [main]
+    branches: [main, experiment/ferrostar]
   workflow_dispatch:
 
 jobs:
@@ -25,6 +25,11 @@ jobs:
             -destination 'generic/platform=iOS Simulator' \
             -derivedDataPath "$RUNNER_TEMP/MapXSimulator" \
             CODE_SIGNING_ALLOWED=NO build
+      - name: Replay navigation on iPhone simulator
+        run: |
+          set -euo pipefail
+          DEVICE=$(xcrun simctl list devices available -j | jq -r '[.devices[][] | select(.name | startswith("iPhone"))][0].udid')
+          xcodebuild -project MapX.xcodeproj -scheme MapX -destination "id=$DEVICE" -parallel-testing-enabled NO -derivedDataPath "$RUNNER_TEMP/MapXSimulator" CODE_SIGNING_ALLOWED=NO test
       - name: Build unsigned iPhone app
         run: |
           set -euo pipefail
@@ -37,7 +42,7 @@ jobs:
           test -d "$APP"
           /usr/libexec/PlistBuddy -c "Print :UILaunchScreen" "$APP/Info.plist"
           plutil -lint "$APP/Info.plist"
-          test "$(/usr/libexec/PlistBuddy -c 'Print :CFBundleVersion' "$APP/Info.plist")" = "8"
+          test "$(/usr/libexec/PlistBuddy -c 'Print :CFBundleVersion' "$APP/Info.plist")" = "9"
           /usr/libexec/PlistBuddy -c "Print :UIBackgroundModes" "$APP/Info.plist" | grep -q location
           /usr/libexec/PlistBuddy -c "Print :UIBackgroundModes" "$APP/Info.plist" | grep -q audio
           mkdir -p "$RUNNER_TEMP/MapXPackage/Payload"

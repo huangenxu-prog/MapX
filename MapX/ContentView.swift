@@ -91,8 +91,10 @@ struct ContentView: View {
                             .font(.system(size: 35, weight: .bold))
                             .accessibilityHidden(true)
                         VStack(alignment: .leading, spacing: 3) {
-                            Text(formattedDistance(guidance.distanceToTurn))
+                            if guidance.showTurnDistance {
+                                Text(formattedDistance(guidance.distanceToTurn))
                                 .font(.title.bold()).monospacedDigit()
+                            }
                             Text(guidance.nextInstruction)
                                 .font(.headline).lineLimit(3)
                         }

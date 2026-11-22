@@ -63,12 +63,11 @@ final class NavigationSession: ObservableObject {
     /// Runs immediately when GPS confirms arrival; independent of view rendering.
     var onArrival: (() -> Void)?
 
-    private var route: MKRoute?
-    private var destinationCoordinate: CLLocationCoordinate2D?
+    private var engine: FerroGuidance?
+    @Published private(set) var showTurnDistance = false
     private let voice = VoicePromptPlayer()
     private var announced: Set<String> = []
     private var offRouteSamples = 0
-    private var arrivalSamples = 0
     private var lastRerouteAt = Date.distantPast
 
     init() {
@@ -87,91 +86,75 @@ final class NavigationSession: ObservableObject {
     func start(_ newRoute: MKRoute, destination: CLLocationCoordinate2D) {
         stop()
         arrived = false
-        route = newRoute
-        destinationCoordinate = destination
+        engine = FerroGuidance(apple: newRoute)
+        showTurnDistance = false
         isActive = true
         remainingDistance = newRoute.distance
-        nextInstruction = newRoute.steps.first(where: { !$0.instructions.isEmpty })?.instructions
-            ?? "沿当前路线行驶"
+        nextInstruction = "正在确认当前位置"
         voice.say("开始导航")
     }
 
     /// Replanning is still the same trip, not a fresh start.
     func replaceRoute(_ newRoute: MKRoute, destination: CLLocationCoordinate2D) {
         guard isActive else { return }
-        route = newRoute
-        destinationCoordinate = destination
+        engine = FerroGuidance(apple: newRoute)
+        showTurnDistance = false
         announced.removeAll()
         offRouteSamples = 0
-        arrivalSamples = 0
         remainingDistance = newRoute.distance
-        nextInstruction = newRoute.steps.first(where: { !$0.instructions.isEmpty })?.instructions
-            ?? "沿当前路线行驶"
+        nextInstruction = "正在确认当前位置"
         voice.say("路线已更新")
     }
 
     func stop() {
         voice.stop()
         isActive = false
-        route = nil
-        destinationCoordinate = nil
+        engine = nil
         announced.removeAll()
         offRouteSamples = 0
-        arrivalSamples = 0
         remainingDistance = 0
         distanceToTurn = 0
         nextInstruction = "沿当前路线行驶"
     }
 
     func update(_ fix: CLLocation) {
-        guard isActive, let route,
-              fix.horizontalAccuracy >= 0, fix.horizontalAccuracy <= 65,
+        guard isActive, fix.horizontalAccuracy >= 0, fix.horizontalAccuracy <= 65,
               abs(fix.timestamp.timeIntervalSinceNow) < 20 else { return }
-
-        let progress = RouteGeometry.progress(on: route, location: fix)
-        remainingDistance = progress.remainingDistance
-        distanceToTurn = progress.distanceToNextTurn
-
-        // Avoid false arrival caused by the route passing near the destination
-        // earlier, GPS jumps, or an inaccurate fix. Require two close, slow fixes.
-        if let endpoint = destinationCoordinate {
-            let metersToDestination = fix.distance(from:
-                CLLocation(latitude: endpoint.latitude, longitude: endpoint.longitude))
-            let slowEnough = fix.speed < 0 || fix.speed < 8
-            if metersToDestination < 40 &&
-                progress.distanceFromRoute < 55 &&
-                progress.remainingDistance < 150 &&
-                fix.horizontalAccuracy <= 35 && slowEnough {
-                arrivalSamples += 1
-            } else {
-                arrivalSamples = 0
-            }
-            if arrivalSamples >= 2 {
-                finishArrival()
-                return
-            }
+        guard let engine else {
+            nextInstruction = "缺少路线明细，正在重新规划"
+            requestReroute()
+            return
         }
-
-        if let stepIndex = progress.nextStepIndex {
-            let instruction = route.steps[stepIndex].instructions
-            nextInstruction = instruction
-            if (90..<400).contains(progress.distanceToNextTurn) {
-                speakOnce("approach-\(stepIndex)",
-                          text: "前方\(Int(progress.distanceToNextTurn))米，\(instruction)")
-            }
-            if progress.distanceToNextTurn < 90 {
-                speakOnce("near-\(stepIndex)", text: instruction)
-            }
-        } else {
-            nextInstruction = "继续行驶至目的地"
-        }
-
-        if progress.distanceFromRoute > 130 && max(0, fix.speed) > 2 {
+        switch engine.update(fix) {
+        case .join:
+            showTurnDistance = false
+            nextInstruction = "前往驾车路线"
+            speakOnce("join", text: nextInstruction)
+            offRouteSamples = fix.speed > 2 ? offRouteSamples + 1 : 0
+        case .offRoute:
+            showTurnDistance = false
+            nextInstruction = "已偏离路线"
             offRouteSamples += 1
-        } else {
+        case let .navigating(remaining, turn, instruction, step):
             offRouteSamples = 0
+            showTurnDistance = true
+            remainingDistance = remaining
+            distanceToTurn = turn
+            nextInstruction = instruction
+            if (90..<400).contains(turn) {
+                speakOnce("approach-\(step)", text: "前方\(Int(turn))米，\(instruction)")
+            } else if turn < 90 {
+                speakOnce("near-\(step)", text: instruction)
+            }
+        case .complete:
+            finishArrival()
+            return
         }
-        if offRouteSamples >= 4, Date().timeIntervalSince(lastRerouteAt) > 30 {
+        if offRouteSamples >= 4 { requestReroute() }
+    }
+
+    private func requestReroute() {
+        if Date().timeIntervalSince(lastRerouteAt) > 30 {
             lastRerouteAt = Date()
             offRouteSamples = 0
             needsReroute += 1
@@ -182,12 +165,10 @@ final class NavigationSession: ObservableObject {
     private func finishArrival() {
         // Keep the final utterance alive after isActive becomes false. The View
         // clears the map and disables background GPS without cutting off speech.
-        route = nil
-        destinationCoordinate = nil
+        engine = nil
         isActive = false
         arrived = true
         offRouteSamples = 0
-        arrivalSamples = 0
         onArrival?()
         voice.stop()
         voice.say("已到达目的地附近，导航结束")
