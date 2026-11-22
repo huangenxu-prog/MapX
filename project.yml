@@ -8,7 +8,7 @@ settings:
     SWIFT_VERSION: "5.9"
     TARGETED_DEVICE_FAMILY: "1"
     MARKETING_VERSION: "1.0"
-    CURRENT_PROJECT_VERSION: "6"
+    CURRENT_PROJECT_VERSION: "7"
 targets:
   MapX:
     type: application
@@ -20,7 +20,7 @@ targets:
       properties:
         CFBundleDisplayName: MapX
         CFBundleShortVersionString: "1.0"
-        CFBundleVersion: "6"
+        CFBundleVersion: "7"
         NSLocationWhenInUseUsageDescription: "MapX 在地图显示和导航时使用位置；开始导航后锁屏仍会持续定位，以提供转向提示。"
         UIBackgroundModes:
           - location

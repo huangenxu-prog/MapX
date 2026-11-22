@@ -27,6 +27,7 @@ struct ContentView: View {
     @State private var locateZoomLimit: CLLocationDistance?
     @State private var zoomLimitTask: Task<Void, Never>?
     @State private var pendingLocate = false
+    @State private var exploring = false
     @State private var followRecoveryTask: Task<Void, Never>?
     @FocusState private var searchFocused: Bool
 
@@ -48,6 +49,14 @@ struct ContentView: View {
 
     var body: some View {
         ZStack {
+            if guidance.isActive, let route = selectedRoute {
+                DrivingMap(route: route, destination: destination, fix: locationService.location,
+                           exploring: exploring, onExplore: {
+                    exploring = true
+                    scheduleFollowRecovery()
+                })
+                .ignoresSafeArea()
+            } else {
             Map(position: $camera, bounds: mapCameraBounds) {
                 UserAnnotation()
                 if let destination {
@@ -70,15 +79,14 @@ struct ContentView: View {
                 if distance.isFinite && distance > 0 {
                     visibleMapDistance = distance
                 }
-                if guidance.isActive && camera.positionedByUser {
-                    scheduleFollowRecovery()
-                }
+
             }
             .mapControls {
                 MapCompass()
                 MapScaleView()
             }
             .ignoresSafeArea()
+            }
 
             VStack(spacing: 12) {
                 if guidance.isActive, let route = selectedRoute {
@@ -110,7 +118,7 @@ struct ContentView: View {
                     .background(Color(red: 0.07, green: 0.10, blue: 0.17).opacity(0.96),
                                 in: RoundedRectangle(cornerRadius: 24))
                     Spacer()
-                    if camera.positionedByUser {
+                    if exploring {
                         Button { followUser() } label: {
                             Image(systemName: "location.fill")
                                 .frame(width: 46, height: 46)
@@ -193,9 +201,7 @@ struct ContentView: View {
         .onChange(of: camera.positionedByUser) { _, movedByUser in
             if movedByUser {
                 repeatedLocateDistance = nil
-                if guidance.isActive { scheduleFollowRecovery() }
-            } else {
-                followRecoveryTask?.cancel()
+
             }
         }
         .onChange(of: guidance.needsReroute) { _, _ in
@@ -244,10 +250,7 @@ struct ContentView: View {
 
     private func followUser() {
         followRecoveryTask?.cancel()
-        // The native MapKit location is the reference for centering. Do not use
-        // the separately delivered raw CoreLocation coordinate as a fallback:
-        // in mainland China their datum may not match the displayed base map.
-        camera = .userLocation(followsHeading: true, fallback: .automatic)
+        exploring = false
     }
 
     private func scheduleFollowRecovery() {
@@ -259,7 +262,7 @@ struct ContentView: View {
             } catch {
                 return
             }
-            guard guidance.isActive, camera.positionedByUser else { return }
+            guard guidance.isActive, exploring else { return }
             followUser()
         }
     }

@@ -9,6 +9,10 @@ jobs:
     runs-on: macos-15
     steps:
       - uses: actions/checkout@v4
+      - name: Replay driving course changes
+        run: |
+          xcrun swiftc MapX/Navigation/DrivingCourse.swift Tests/CourseReplay/main.swift -o "$RUNNER_TEMP/course-replay"
+          "$RUNNER_TEMP/course-replay"
       - name: Install XcodeGen
         run: brew install xcodegen
       - name: Generate Xcode project
@@ -33,7 +37,7 @@ jobs:
           test -d "$APP"
           /usr/libexec/PlistBuddy -c "Print :UILaunchScreen" "$APP/Info.plist"
           plutil -lint "$APP/Info.plist"
-          test "$(/usr/libexec/PlistBuddy -c 'Print :CFBundleVersion' "$APP/Info.plist")" = "6"
+          test "$(/usr/libexec/PlistBuddy -c 'Print :CFBundleVersion' "$APP/Info.plist")" = "7"
           /usr/libexec/PlistBuddy -c "Print :UIBackgroundModes" "$APP/Info.plist" | grep -q location
           /usr/libexec/PlistBuddy -c "Print :UIBackgroundModes" "$APP/Info.plist" | grep -q audio
           mkdir -p "$RUNNER_TEMP/MapXPackage/Payload"
