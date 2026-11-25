@@ -55,6 +55,7 @@ final class NavigationSession: ObservableObject {
     @Published private(set) var isActive = false
     @Published private(set) var nextInstruction = "沿当前路线行驶"
     @Published private(set) var distanceToTurn: CLLocationDistance = 0
+    @Published private(set) var hasRouteMatch = false
     @Published private(set) var remainingDistance: CLLocationDistance = 0
     @Published private(set) var needsReroute = 0
     @Published private(set) var arrived = false
@@ -99,8 +100,9 @@ final class NavigationSession: ObservableObject {
         destinationCoordinate = destination
         isActive = true
         remainingDistance = newRoute.distance
-        nextInstruction = newRoute.steps.first(where: { !$0.instructions.isEmpty })?.instructions
+        nextInstruction = newRoute.steps.first(where: { !$0.instructions.isEmpty && $0.distance > 0 })?.instructions
             ?? (walking ? "沿当前路线步行" : "沿当前路线行驶")
+        distanceToTurn = newRoute.steps.first(where: { $0.distance > 0 })?.distance ?? newRoute.distance
         voice.say("开始导航")
     }
 
@@ -111,15 +113,16 @@ final class NavigationSession: ObservableObject {
         destinationCoordinate = destination
         lastFix = nil
         matchedDistance = nil
+        hasRouteMatch = false
         displayCoordinate = nil
         matchedAt = nil
         firstFixAt = nil
-        distanceToTurn = 0
+        distanceToTurn = newRoute.steps.first(where: { $0.distance > 0 })?.distance ?? newRoute.distance
         announced.removeAll()
         offRouteSamples = 0
         arrivalSamples = 0
         remainingDistance = newRoute.distance
-        nextInstruction = newRoute.steps.first(where: { !$0.instructions.isEmpty })?.instructions
+        nextInstruction = newRoute.steps.first(where: { !$0.instructions.isEmpty && $0.distance > 0 })?.instructions
             ?? "沿当前路线行驶"
         voice.say("路线已更新")
     }
@@ -131,6 +134,7 @@ final class NavigationSession: ObservableObject {
         destinationCoordinate = nil
         lastFix = nil
         matchedDistance = nil
+        hasRouteMatch = false
         displayCoordinate = nil
         matchedAt = nil
         firstFixAt = nil
@@ -155,13 +159,14 @@ final class NavigationSession: ObservableObject {
         let measuredSpeed = fix.speed >= 0 ? min(speedLimit, fix.speed) : (walking ? 2.0 : 12.0)
         let advance = max(35, min(800, elapsed * max(walking ? 2 : 8, measuredSpeed) * 1.8 + fix.horizontalAccuracy * 2))
         let progress = RouteGeometry.progress(on: route, location: fix,
-                                              previousDistance: matchedDistance ?? 0,
+                                              previousDistance: matchedDistance,
                                               maximumAdvance: advance)
         let matchTolerance = walking ? max(25, fix.horizontalAccuracy * 1.5) : max(45, fix.horizontalAccuracy * 1.5)
         let matched = progress.distanceFromRoute.isFinite && progress.distanceFromRoute <= matchTolerance
         // Display-only snap: keep raw GPS for arrival and off-route decisions.
         let displayTolerance = min(walking ? 18.0 : 30.0, max(8, fix.horizontalAccuracy * 1.5))
         displayCoordinate = matched && progress.distanceFromRoute <= displayTolerance ? progress.matchedCoordinate : nil
+        hasRouteMatch = matched
         if matched {
             matchedDistance = progress.distanceAlongRoute
             matchedAt = fix.timestamp
@@ -203,12 +208,13 @@ final class NavigationSession: ObservableObject {
             nextInstruction = walking ? "继续步行至目的地" : "继续行驶至目的地"
         }
 
-        if progress.distanceFromRoute > max(walking ? 40 : 90, fix.horizontalAccuracy * 2) && max(0, fix.speed) > (walking ? 0.5 : 2) {
+        if !matched && progress.distanceFromRoute > max(walking ? 40 : 90, fix.horizontalAccuracy * 2) {
             offRouteSamples += 1
+            nextInstruction = "正在确认当前位置与路线"
         } else {
             offRouteSamples = 0
         }
-        if offRouteSamples >= 4, Date().timeIntervalSince(lastRerouteAt) > (walking ? 20 : 30) {
+        if offRouteSamples >= 3, Date().timeIntervalSince(lastRerouteAt) > (walking ? 20 : 30) {
             lastRerouteAt = Date()
             offRouteSamples = 0
             needsReroute += 1

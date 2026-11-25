@@ -282,7 +282,7 @@ struct ContentView: View {
             }
             return
         }
-        guard locationService.location != nil else {
+        guard let fix = locationService.location, abs(fix.timestamp.timeIntervalSinceNow) < 20, fix.horizontalAccuracy >= 0, fix.horizontalAccuracy <= 65 else {
             pendingLocate = true
             locationService.requestLocation()
             return
@@ -609,7 +609,7 @@ struct ContentView: View {
                 .frame(width: 66)
                 .accessibilityHidden(true)
             VStack(alignment: .leading, spacing: 6) {
-                Text(formattedDistance(guidance.distanceToTurn))
+                Text(guidance.hasRouteMatch ? formattedDistance(guidance.distanceToTurn) : "定位中")
                     .font(.system(size: 32, weight: .bold)).monospacedDigit()
                 Text(guidance.nextInstruction)
                     .font(.system(size: 18, weight: .semibold)).lineLimit(3)
@@ -812,7 +812,7 @@ struct ContentView: View {
         routeTask = Task {
             defer { if !Task.isCancelled { isRouting = false } }
             let request = MKDirections.Request()
-            request.source = (fix ?? locationService.location).map { MKMapItem(placemark: MKPlacemark(coordinate: $0.coordinate)) } ?? .forCurrentLocation()
+            request.source = .forCurrentLocation()
             request.destination = destination
             request.transportType = requestedWalking ? .walking : .automobile
             request.requestsAlternateRoutes = true
@@ -873,9 +873,7 @@ struct ContentView: View {
         followUser()
         guidance.start(selectedRoute, destination: destination.placemark.coordinate, walking: walking)
         locationService.setNavigating(true, walking: walking)
-        if let fix = locationService.location {
-            guidance.update(fix)
-        }
+        guidance.update(fix)
     }
 
     private func stopNavigation() {

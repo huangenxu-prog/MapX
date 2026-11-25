@@ -16,7 +16,7 @@ struct DrivingMap: UIViewRepresentable {
     func makeUIView(context: Context) -> MKMapView {
         let map = MKMapView()
         map.delegate = context.coordinator
-        map.showsUserLocation = false
+        map.showsUserLocation = true
         map.overrideUserInterfaceStyle = .unspecified
         map.setUserTrackingMode(.none, animated: false)
         return map
@@ -26,10 +26,14 @@ struct DrivingMap: UIViewRepresentable {
         let driver = context.coordinator
         driver.onExplore = onExplore
         map.overrideUserInterfaceStyle = context.environment.colorScheme == .dark ? .dark : .light
-        if driver.line !== route.polyline {
+        if driver.currentRoute !== route {
             if let old = driver.line { map.removeOverlay(old) }
-            driver.line = route.polyline
-            map.addOverlay(route.polyline, level: .aboveRoads)
+            driver.currentRoute = route
+            let line = route.polyline
+            driver.line = line
+            map.addOverlay(line, level: .aboveRoads)
+            map.setVisibleMapRect(line.boundingMapRect, edgePadding: UIEdgeInsets(top: 140, left: 40, bottom: 140, right: 40), animated: false)
+            driver.lastCenter = nil
             if let pin = driver.pin { map.removeAnnotation(pin) }
             if let destination {
                 let pin = MKPointAnnotation()
@@ -40,12 +44,13 @@ struct DrivingMap: UIViewRepresentable {
             }
         }
         driver.walking = walking
+        driver.routeMatched = displayCoordinate != nil
         if let fix, CLLocationCoordinate2DIsValid(fix.coordinate),
            fix.horizontalAccuracy >= 0, fix.horizontalAccuracy <= 65,
            abs(fix.timestamp.timeIntervalSinceNow) < 20 {
             driver.course.update(fix)
             driver.speed = max(0, fix.speed)
-            driver.updatePosition(displayCoordinate ?? fix.coordinate, on: map)
+            if let displayCoordinate { driver.updatePosition(displayCoordinate, on: map) } else { driver.clearPosition(on: map) }
         }
         if driver.exploring && !exploring { driver.lastCenter = nil }
         driver.exploring = exploring
@@ -54,15 +59,24 @@ struct DrivingMap: UIViewRepresentable {
     }
 
     final class Coordinator: NSObject, MKMapViewDelegate {
+        var currentRoute: MKRoute?
         var line: MKPolyline?
         var pin: MKPointAnnotation?
         var course = DrivingCourse()
         var speed: CLLocationSpeed = 0
         var walking = false
+        var routeMatched = false
         private var position: MKPointAnnotation?
+
+        func clearPosition(on map: MKMapView) {
+            if let position { map.removeAnnotation(position) }
+            position = nil
+            map.showsUserLocation = true
+        }
 
         func updatePosition(_ coordinate: CLLocationCoordinate2D, on map: MKMapView) {
             guard CLLocationCoordinate2DIsValid(coordinate) else { return }
+            map.showsUserLocation = false
             if let position {
                 position.coordinate = coordinate
             } else {
@@ -87,10 +101,10 @@ struct DrivingMap: UIViewRepresentable {
         private var manualGesture = false
 
         func follow(_ map: MKMapView) {
-            guard !exploring, !manualGesture, let position else { return }
+            guard !exploring, !manualGesture, routeMatched, let position else { return }
             let point = MKMapPoint(position.coordinate)
             let heading = course.hasHeading ? course.degrees : map.camera.heading
-            let desiredDistance = walking ? 220.0 : min(1100, max(350, 350 + speed * 22))
+            let desiredDistance = walking ? 350.0 : min(1500, max(700, 700 + speed * 22))
             let distance = lastCenter == nil ? desiredDistance : lastDistance + (desiredDistance - lastDistance) * 0.2
             let angle = abs((heading - lastHeading + 540).truncatingRemainder(dividingBy: 360) - 180)
             if let lastCenter {
@@ -116,7 +130,18 @@ struct DrivingMap: UIViewRepresentable {
             guard let position, annotation === position else { return nil }
             let view = map.dequeueReusableAnnotationView(withIdentifier: "navigation-position") ?? MKAnnotationView(annotation: annotation, reuseIdentifier: "navigation-position")
             view.annotation = annotation
-            view.image = UIImage(systemName: "location.north.circle.fill", withConfiguration: UIImage.SymbolConfiguration(pointSize: 32, weight: .bold))?.withTintColor(.systemBlue, renderingMode: .alwaysOriginal)
+            view.image = UIGraphicsImageRenderer(size: CGSize(width: 40, height: 40)).image { _ in
+                UIColor.white.setFill()
+                UIBezierPath(ovalIn: CGRect(x: 0, y: 0, width: 40, height: 40)).fill()
+                UIColor.systemBlue.setFill()
+                let arrow = UIBezierPath()
+                arrow.move(to: CGPoint(x: 20, y: 5))
+                arrow.addLine(to: CGPoint(x: 32, y: 32))
+                arrow.addLine(to: CGPoint(x: 20, y: 26))
+                arrow.addLine(to: CGPoint(x: 8, y: 32))
+                arrow.close()
+                arrow.fill()
+            }.withRenderingMode(.alwaysOriginal)
             view.canShowCallout = false
             view.displayPriority = .required
             return view
