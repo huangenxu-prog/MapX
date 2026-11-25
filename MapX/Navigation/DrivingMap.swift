@@ -17,7 +17,7 @@ struct DrivingMap: UIViewRepresentable {
         let map = MKMapView()
         map.delegate = context.coordinator
         map.showsUserLocation = false
-        map.overrideUserInterfaceStyle = .dark
+        map.overrideUserInterfaceStyle = .unspecified
         map.setUserTrackingMode(.none, animated: false)
         return map
     }
@@ -25,6 +25,7 @@ struct DrivingMap: UIViewRepresentable {
     func updateUIView(_ map: MKMapView, context: Context) {
         let driver = context.coordinator
         driver.onExplore = onExplore
+        map.overrideUserInterfaceStyle = context.environment.colorScheme == .dark ? .dark : .light
         if driver.line !== route.polyline {
             if let old = driver.line { map.removeOverlay(old) }
             driver.line = route.polyline
@@ -49,6 +50,7 @@ struct DrivingMap: UIViewRepresentable {
         if driver.exploring && !exploring { driver.lastCenter = nil }
         driver.exploring = exploring
         driver.follow(map)
+        driver.updateMarkerHeading(on: map)
     }
 
     final class Coordinator: NSObject, MKMapViewDelegate {
@@ -69,6 +71,12 @@ struct DrivingMap: UIViewRepresentable {
                 position = marker
                 map.addAnnotation(marker)
             }
+        }
+        func updateMarkerHeading(on map: MKMapView) {
+            guard let position, let view = map.view(for: position) else { return }
+            let bearing = course.hasHeading ? course.degrees : map.camera.heading
+            let angle = (bearing - map.camera.heading) * .pi / 180
+            view.transform = CGAffineTransform(rotationAngle: CGFloat(angle))
         }
         var exploring = false
         var onExplore: (() -> Void)?
@@ -100,6 +108,10 @@ struct DrivingMap: UIViewRepresentable {
             map.setCamera(camera, animated: animate)
         }
 
+        func mapViewDidChangeVisibleRegion(_ map: MKMapView) {
+            updateMarkerHeading(on: map)
+        }
+
         func mapView(_ map: MKMapView, viewFor annotation: MKAnnotation) -> MKAnnotationView? {
             guard let position, annotation === position else { return nil }
             let view = map.dequeueReusableAnnotationView(withIdentifier: "navigation-position") ?? MKAnnotationView(annotation: annotation, reuseIdentifier: "navigation-position")
@@ -125,9 +137,10 @@ struct DrivingMap: UIViewRepresentable {
         }
 
         func mapView(_ map: MKMapView, regionDidChangeAnimated animated: Bool) {
+            updateMarkerHeading(on: map)
             if manualGesture {
                 manualGesture = false
-                onExplore?()
+                DispatchQueue.main.async { [weak self] in self?.onExplore?() }
             }
         }
 
