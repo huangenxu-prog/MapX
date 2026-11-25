@@ -13,6 +13,11 @@ struct ContentView: View {
     @State private var query = ""
     @State private var searchResults: [MKMapItem] = []
     @State private var showingResults = false
+    @State private var searchingPage = false
+    @State private var arrivalPlace: SavedPlace?
+    @State private var satellite = false
+    @State private var showRecent = true
+    @AppStorage("mapx.recentQueries") private var recentQueryData = ""
     @State private var destination: MKMapItem?
     @State private var routes: [MKRoute] = []
     @State private var selectedRouteIndex = 0
@@ -66,7 +71,7 @@ struct ContentView: View {
             .simultaneousGesture(MagnifyGesture().onChanged { _ in
                 repeatedLocateDistance = nil
             })
-            .mapStyle(.standard(elevation: .flat))
+            .mapStyle(satellite ? MapStyle.hybrid(elevation: .flat) : MapStyle.standard(elevation: .flat))
             .onMapCameraChange(frequency: .onEnd) { context in
                 let distance = context.camera.distance
                 if distance.isFinite && distance > 0 {
@@ -100,17 +105,55 @@ struct ContentView: View {
                         }
                     }
                     guidanceFooter(route)
-                } else if destination != nil && !showingResults {
-                    searchBar
+                } else if let place = arrivalPlace {
+                    Spacer(minLength: 0)
+                    arrivalPanel(place)
+                } else if searchingPage {
+                    searchPage
+                } else if destination != nil {
+                    HStack {
+                        Button { stopNavigation() } label: { floatingIcon("chevron.left") }
+                            .accessibilityLabel("返回地图")
+                        Spacer()
+                        Button { satellite.toggle() } label: { floatingIcon("square.3.layers.3d") }
+                            .accessibilityLabel("切换地图类型")
+                    }
                     Spacer(minLength: 0)
                     HStack { Spacer(); locateButton }
                     routePanel
                 } else {
-                    searchBar
-                    if showingResults { searchResultsView }
-                    else { savedPlacesPanel }
+                    Button { openSearch() } label: {
+                        HStack(spacing: 12) {
+                            Image(systemName: "magnifyingglass").foregroundStyle(.secondary)
+                            Text("搜索地点或地址").foregroundStyle(.secondary)
+                            Spacer()
+                        }
+                        .padding(16)
+                        .background(panelBackground, in: RoundedRectangle(cornerRadius: 16))
+                        .shadow(color: .black.opacity(0.12), radius: 6, y: 2)
+                    }
+                    .buttonStyle(.plain)
+                    HStack(spacing: 8) {
+                        shortcut("家", symbol: "house.fill", detail: savedPlaces.home?.name ?? "设置地点") {
+                            if let home = savedPlaces.home { select(home.mapItem) } else { openSearch() }
+                        }
+                        shortcut("公司", symbol: "briefcase.fill", detail: savedPlaces.work?.name ?? "设置地点") {
+                            if let work = savedPlaces.work { select(work.mapItem) } else { openSearch() }
+                        }
+                        shortcut("最近", symbol: "clock", detail: "\(savedPlaces.recent.count) 个地点") {
+                            showRecent.toggle()
+                        }
+                    }
                     Spacer(minLength: 0)
-                    HStack { Spacer(); locateButton }
+                    HStack {
+                        Spacer()
+                        VStack(spacing: 10) {
+                            locateButton
+                            Button { satellite.toggle() } label: { floatingIcon("square.3.layers.3d") }
+                                .accessibilityLabel("切换地图类型")
+                        }
+                    }
+                    if showRecent && !savedPlaces.recent.isEmpty { homeRecentPanel }
                 }
             }
             .padding(.horizontal, 12)
@@ -172,8 +215,9 @@ struct ContentView: View {
         }
         .onChange(of: guidance.arrived) { _, arrived in
             if arrived {
+                let place = destination.map { SavedPlace(item: $0) }
                 stopNavigation()
-                errorMessage = "已到达目的地附近，导航已自动结束。"
+                arrivalPlace = place
             }
         }
         .alert("提示", isPresented: Binding(
@@ -390,6 +434,151 @@ struct ContentView: View {
         .accessibilityLabel("定位并放大")
     }
 
+    private var recentQueries: [String] { recentQueryData.split(separator: "\n").map(String.init) }
+
+    private func openSearch() {
+        query = ""
+        searchResults = []
+        showingResults = false
+        searchingPage = true
+        searchFocused = true
+    }
+
+    private func cancelSearch() {
+        searchTask?.cancel()
+        isSearching = false
+        searchFocused = false
+        searchingPage = false
+        showingResults = false
+        searchResults = []
+        query = ""
+    }
+
+    private func shortcut(_ title: String, symbol: String, detail: String, action: @escaping () -> Void) -> some View {
+        Button(action: action) {
+            HStack(spacing: 7) {
+                Image(systemName: symbol).font(.system(size: 19, weight: .semibold)).foregroundStyle(.blue)
+                VStack(alignment: .leading, spacing: 3) {
+                    Text(title).font(.subheadline.bold())
+                    Text(detail).font(.caption2).foregroundStyle(.secondary).lineLimit(1)
+                }
+                Spacer(minLength: 0)
+            }
+            .padding(10).frame(maxWidth: .infinity, alignment: .leading)
+            .background(panelBackground, in: RoundedRectangle(cornerRadius: 13))
+            .shadow(color: .black.opacity(0.09), radius: 4, y: 2)
+        }.buttonStyle(.plain)
+    }
+
+    private var homeRecentPanel: some View {
+        VStack(alignment: .leading, spacing: 0) {
+            Capsule().fill(Color.secondary.opacity(0.3)).frame(width: 32, height: 4)
+                .frame(maxWidth: .infinity).padding(.bottom, 10)
+            Text("最近去过").font(.headline).padding(.horizontal, 14)
+            ForEach(savedPlaces.recent.prefix(2)) { place in
+                savedPlaceRow(place, symbol: "clock", title: place.name)
+                    .contextMenu {
+                        Button("设为家") { savedPlaces.markHome(place) }
+                        Button("设为公司") { savedPlaces.markWork(place) }
+                        Button("删除", role: .destructive) { savedPlaces.removeRecent(place) }
+                    }
+            }
+        }
+        .padding(.vertical, 12)
+        .background(panelBackground, in: RoundedRectangle(cornerRadius: 22))
+        .shadow(color: .black.opacity(0.12), radius: 8, y: 2)
+    }
+
+    private var searchPage: some View {
+        VStack(alignment: .leading, spacing: 12) {
+            HStack {
+                HStack {
+                    Image(systemName: "magnifyingglass").foregroundStyle(.secondary)
+                    TextField("搜索地点或地址", text: $query)
+                        .focused($searchFocused).submitLabel(.search).onSubmit(search)
+                        .accessibilityIdentifier("mapx.search")
+                    if !query.isEmpty {
+                        Button { query = ""; searchResults = []; showingResults = false; searchTask?.cancel(); isSearching = false } label: {
+                            Image(systemName: "xmark.circle.fill").foregroundStyle(.secondary)
+                        }
+                    }
+                }.padding(12).background(Color.secondary.opacity(0.12), in: RoundedRectangle(cornerRadius: 14))
+                Button("取消") { cancelSearch() }
+            }
+            ScrollView {
+                VStack(alignment: .leading, spacing: 0) {
+                    ForEach(searchResults, id: \.self) { item in
+                        Button { select(item) } label: {
+                            HStack(spacing: 12) {
+                                Image(systemName: "mappin.circle.fill").foregroundStyle(.secondary)
+                                VStack(alignment: .leading, spacing: 5) {
+                                    Text(item.name ?? "地点").font(.subheadline.bold())
+                                    Text(item.placemark.title ?? "").font(.caption).foregroundStyle(.secondary).lineLimit(2)
+                                }
+                                Spacer()
+                                if let fix = locationService.location {
+                                    Text(formattedDistance(fix.distance(from: CLLocation(latitude: item.placemark.coordinate.latitude, longitude: item.placemark.coordinate.longitude))))
+                                        .font(.caption).foregroundStyle(.secondary)
+                                }
+                            }.padding(.vertical, 14)
+                        }.buttonStyle(.plain)
+                        Divider()
+                    }
+                    if !recentQueries.isEmpty {
+                        HStack {
+                            Text("最近搜索").font(.headline)
+                            Spacer()
+                            Button("清空") { recentQueryData = "" }.font(.caption)
+                        }.padding(.vertical, 14)
+                        ForEach(recentQueries, id: \.self) { term in
+                            Button { query = term; search() } label: {
+                                HStack {
+                                    Image(systemName: "clock").foregroundStyle(.secondary)
+                                    Text(term).font(.subheadline)
+                                    Spacer()
+                                }.padding(.vertical, 13)
+                            }.buttonStyle(.plain)
+                            Divider()
+                        }
+                    }
+                    if searchResults.isEmpty { savedPlacesPanel }
+                }
+            }
+            Spacer(minLength: 0)
+        }
+        .padding(8)
+        .frame(maxWidth: .infinity, maxHeight: .infinity, alignment: .topLeading)
+        .background(panelBackground.ignoresSafeArea())
+    }
+
+    private func arrivalPanel(_ place: SavedPlace) -> some View {
+        VStack(spacing: 14) {
+            Image(systemName: "checkmark.circle.fill").font(.system(size: 44)).foregroundStyle(.green)
+            Text("已到达目的地附近").font(.title2.bold())
+            Text(place.name).font(.headline)
+            Text(place.address).font(.caption).foregroundStyle(.secondary).multilineTextAlignment(.center)
+            VStack(alignment: .leading, spacing: 0) {
+                Button { savedPlaces.add(place.mapItem); arrivalPlace = nil } label: {
+                    Label("保留到最近", systemImage: "star.fill").frame(maxWidth: .infinity, alignment: .leading).padding(13)
+                }
+                Divider()
+                Button { savedPlaces.markHome(place); arrivalPlace = nil } label: {
+                    Label("设为家", systemImage: "house.fill").frame(maxWidth: .infinity, alignment: .leading).padding(13)
+                }
+                Divider()
+                Button { savedPlaces.markWork(place); arrivalPlace = nil } label: {
+                    Label("设为公司", systemImage: "briefcase.fill").frame(maxWidth: .infinity, alignment: .leading).padding(13)
+                }
+            }.buttonStyle(.plain).background(Color.secondary.opacity(0.08), in: RoundedRectangle(cornerRadius: 12))
+            Button { arrivalPlace = nil } label: {
+                Text("完成").font(.headline).frame(maxWidth: .infinity).padding(.vertical, 5)
+            }.buttonStyle(.borderedProminent).controlSize(.large)
+        }
+        .padding(20).frame(maxWidth: .infinity)
+        .background(panelBackground, in: RoundedRectangle(cornerRadius: 24))
+        .shadow(color: .black.opacity(0.12), radius: 8, y: 2)
+    }
+
     private var panelBackground: Color { Color(uiColor: .systemBackground) }
 
     private func floatingIcon(_ symbol: String) -> some View {
@@ -457,7 +646,17 @@ struct ContentView: View {
         VStack(alignment: .leading, spacing: 14) {
             Capsule().fill(Color.secondary.opacity(0.35)).frame(width: 32, height: 4)
                 .frame(maxWidth: .infinity)
-            Text(destination?.name ?? "目的地").font(.title2.bold()).lineLimit(1)
+            HStack {
+                VStack(alignment: .leading, spacing: 4) {
+                    Text(destination?.name ?? "目的地").font(.title2.bold()).lineLimit(1)
+                    Text(destination?.placemark.title ?? "").font(.caption).foregroundStyle(.secondary).lineLimit(2)
+                }
+                Spacer()
+                Button { stopNavigation() } label: {
+                    Image(systemName: "xmark").font(.subheadline.bold()).frame(width: 36, height: 36)
+                        .background(Color.secondary.opacity(0.10), in: Circle())
+                }.foregroundStyle(.primary)
+            }
             HStack(spacing: 10) {
                 modeButton("驾车", symbol: "car.fill", value: false)
                 modeButton("步行", symbol: "figure.walk", value: true)
@@ -474,11 +673,15 @@ struct ContentView: View {
                         HStack(spacing: 8) {
                             ForEach(routes.indices, id: \.self) { index in
                                 Button { chooseRoute(index) } label: {
-                                    Text("路线 \(index + 1) · \(max(1, Int(ceil(routes[index].expectedTravelTime / 60)))) 分钟")
-                                        .font(.caption.weight(.semibold))
-                                        .padding(10)
-                                        .background(index == selectedRouteIndex ? Color.blue.opacity(0.15) : Color.secondary.opacity(0.09), in: Capsule())
-                                        .foregroundStyle(index == selectedRouteIndex ? Color.blue : Color.primary)
+                                    VStack(alignment: .leading, spacing: 5) {
+                                        Text("\(max(1, Int(ceil(routes[index].expectedTravelTime / 60)))) 分钟").font(.headline)
+                                        Text(formattedDistance(routes[index].distance)).font(.caption)
+                                    }
+                                    .frame(minWidth: 80, alignment: .leading)
+                                    .padding(12)
+                                    .background(index == selectedRouteIndex ? Color.blue.opacity(0.12) : Color.secondary.opacity(0.09), in: RoundedRectangle(cornerRadius: 12))
+                                    .overlay(RoundedRectangle(cornerRadius: 12).stroke(index == selectedRouteIndex ? Color.blue : Color.clear))
+                                    .foregroundStyle(index == selectedRouteIndex ? Color.blue : Color.primary)
                                 }
                                 .buttonStyle(.plain)
                             }
@@ -540,6 +743,9 @@ struct ContentView: View {
         dismissKeyboard()
         let term = query.trimmingCharacters(in: .whitespacesAndNewlines)
         guard !term.isEmpty else { return }
+        var terms = recentQueries.filter { $0 != term }
+        terms.insert(term, at: 0)
+        recentQueryData = Array(terms.prefix(8)).joined(separator: "\n")
         searchTask?.cancel()
         searchTask = Task {
             isSearching = true
@@ -573,6 +779,7 @@ struct ContentView: View {
         selectedRouteIndex = 0
         showingResults = false
         query = item.name ?? ""
+        searchingPage = false
         camera = .region(MKCoordinateRegion(center: item.placemark.coordinate,
                                              latitudinalMeters: 5000,
                                              longitudinalMeters: 5000))
@@ -662,6 +869,8 @@ struct ContentView: View {
         searchTask?.cancel()
         isSearching = false
         if guidance.isActive { guidance.stop() }
+        searchingPage = false
+        arrivalPlace = nil
         destination = nil
         routes = []
         selectedRouteIndex = 0
