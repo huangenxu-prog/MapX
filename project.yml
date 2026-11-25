@@ -9,12 +9,19 @@ settings:
     TARGETED_DEVICE_FAMILY: "1"
     MARKETING_VERSION: "1.0"
     CURRENT_PROJECT_VERSION: "8"
+packages:
+  Turf:
+    url: https://github.com/flitsmeister/turf-swift
+    revision: b05b4658d1b48eac4127a0d9ebbb5a6f965a8251
 targets:
   MapX:
     type: application
     platform: iOS
     sources:
       - path: MapX
+    dependencies:
+      - package: Turf
+        product: Turf
     info:
       path: MapX/Info.plist
       properties:
