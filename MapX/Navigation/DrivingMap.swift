@@ -1,11 +1,13 @@
 import SwiftUI
 import MapKit
 
-/// The camera follows the annotation drawn by this map. GPS supplies only the travel angle.
+/// The navigation marker and camera share one display coordinate; raw GPS remains independent.
 struct DrivingMap: UIViewRepresentable {
     let route: MKRoute
     let destination: MKMapItem?
     let fix: CLLocation?
+    let displayCoordinate: CLLocationCoordinate2D?
+    let walking: Bool
     let exploring: Bool
     let onExplore: () -> Void
 
@@ -14,10 +16,9 @@ struct DrivingMap: UIViewRepresentable {
     func makeUIView(context: Context) -> MKMapView {
         let map = MKMapView()
         map.delegate = context.coordinator
-        map.showsUserLocation = true
+        map.showsUserLocation = false
         map.overrideUserInterfaceStyle = .dark
-        // Native following holds the user in view until the map delivers its first usable fix.
-        map.setUserTrackingMode(.follow, animated: false)
+        map.setUserTrackingMode(.none, animated: false)
         return map
     }
 
@@ -37,7 +38,14 @@ struct DrivingMap: UIViewRepresentable {
                 map.addAnnotation(pin)
             }
         }
-        if let fix { driver.course.update(fix); driver.speed = max(0, fix.speed) }
+        driver.walking = walking
+        if let fix, CLLocationCoordinate2DIsValid(fix.coordinate),
+           fix.horizontalAccuracy >= 0, fix.horizontalAccuracy <= 65,
+           abs(fix.timestamp.timeIntervalSinceNow) < 20 {
+            driver.course.update(fix)
+            driver.speed = max(0, fix.speed)
+            driver.updatePosition(displayCoordinate ?? fix.coordinate, on: map)
+        }
         if driver.exploring && !exploring { driver.lastCenter = nil }
         driver.exploring = exploring
         driver.follow(map)
@@ -48,6 +56,20 @@ struct DrivingMap: UIViewRepresentable {
         var pin: MKPointAnnotation?
         var course = DrivingCourse()
         var speed: CLLocationSpeed = 0
+        var walking = false
+        private var position: MKPointAnnotation?
+
+        func updatePosition(_ coordinate: CLLocationCoordinate2D, on map: MKMapView) {
+            guard CLLocationCoordinate2DIsValid(coordinate) else { return }
+            if let position {
+                position.coordinate = coordinate
+            } else {
+                let marker = MKPointAnnotation()
+                marker.coordinate = coordinate
+                position = marker
+                map.addAnnotation(marker)
+            }
+        }
         var exploring = false
         var onExplore: (() -> Void)?
         var lastCenter: MKMapPoint?
@@ -57,12 +79,10 @@ struct DrivingMap: UIViewRepresentable {
         private var manualGesture = false
 
         func follow(_ map: MKMapView) {
-            let user = map.userLocation
-            guard !exploring, !manualGesture, user.location != nil,
-                  CLLocationCoordinate2DIsValid(user.coordinate) else { return }
-            let point = MKMapPoint(user.coordinate)
+            guard !exploring, !manualGesture, let position else { return }
+            let point = MKMapPoint(position.coordinate)
             let heading = course.hasHeading ? course.degrees : map.camera.heading
-            let desiredDistance = min(1100, max(350, 350 + speed * 22))
+            let desiredDistance = walking ? 220.0 : min(1100, max(350, 350 + speed * 22))
             let distance = lastCenter == nil ? desiredDistance : lastDistance + (desiredDistance - lastDistance) * 0.2
             let angle = abs((heading - lastHeading + 540).truncatingRemainder(dividingBy: 360) - 180)
             if let lastCenter {
@@ -75,12 +95,20 @@ struct DrivingMap: UIViewRepresentable {
             lastDistance = distance
             lastCameraUpdate = Date()
             if map.userTrackingMode != .none { map.setUserTrackingMode(.none, animated: false) }
-            let camera = MKMapCamera(lookingAtCenter: user.coordinate, fromDistance: distance,
-                                     pitch: 35, heading: heading)
+            let camera = MKMapCamera(lookingAtCenter: position.coordinate, fromDistance: distance,
+                                     pitch: walking ? 0 : 35, heading: heading)
             map.setCamera(camera, animated: animate)
         }
 
-        func mapView(_ map: MKMapView, didUpdate userLocation: MKUserLocation) { follow(map) }
+        func mapView(_ map: MKMapView, viewFor annotation: MKAnnotation) -> MKAnnotationView? {
+            guard let position, annotation === position else { return nil }
+            let view = map.dequeueReusableAnnotationView(withIdentifier: "navigation-position") ?? MKAnnotationView(annotation: annotation, reuseIdentifier: "navigation-position")
+            view.annotation = annotation
+            view.image = UIImage(systemName: "location.north.circle.fill", withConfiguration: UIImage.SymbolConfiguration(pointSize: 32, weight: .bold))?.withTintColor(.systemBlue, renderingMode: .alwaysOriginal)
+            view.canShowCallout = false
+            view.displayPriority = .required
+            return view
+        }
 
         private func interacting(_ view: UIView) -> Bool {
             if (view.gestureRecognizers ?? []).contains(where: { $0.state == .began || $0.state == .changed }) {
