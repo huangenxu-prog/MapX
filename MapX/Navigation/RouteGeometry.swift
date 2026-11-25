@@ -8,6 +8,7 @@ struct RouteProgress {
     let distanceAlongRoute: CLLocationDistance
     let nextStepIndex: Int?
     let distanceToNextTurn: CLLocationDistance
+    let matchedCoordinate: CLLocationCoordinate2D?
 }
 
 /// Turf provides the nearest point on each segment; continuity bounds prevent
@@ -36,22 +37,25 @@ enum RouteGeometry {
             distanceFromRoute: matching.distanceMeters,
             distanceAlongRoute: traveled,
             nextStepIndex: nextStep,
-            distanceToNextTurn: turnDistance
+            distanceToNextTurn: turnDistance,
+            matchedCoordinate: matching.coordinate
         )
     }
 
     private static func project(_ point: MKMapPoint, on line: MKPolyline, previousDistance: CLLocationDistance?, maximumAdvance: CLLocationDistance)
-        -> (alongMeters: Double, distanceMeters: Double) {
+        -> (alongMeters: Double, distanceMeters: Double, coordinate: CLLocationCoordinate2D?) {
         let points = line.points()
         guard line.pointCount > 0 else {
-            return (0, .infinity)
+            return (0, .infinity, nil)
         }
         guard line.pointCount > 1 else {
-            return (0, point.distance(to: points[0]))
+            return (0, point.distance(to: points[0]), points[0].coordinate)
         }
 
         var bestDistance = Double.infinity
         var bestProgress: Double = 0
+        var bestCoordinate: CLLocationCoordinate2D?
+        var localCoordinate: CLLocationCoordinate2D?
         var localDistance = Double.infinity
         var localProgress: Double = 0
         var completed: Double = 0
@@ -67,28 +71,37 @@ enum RouteGeometry {
                 completed += segmentMeters
                 continue
             }
+            let lower = max(0, (previousDistance ?? completed) - 45 - completed)
+            let upper = min(segmentMeters, (previousDistance.map { $0 + maximumAdvance } ?? (completed + segmentMeters)) - completed)
+            guard upper >= lower, segmentMeters > 0 else { completed += segmentMeters; continue }
             let segment = LineString([start.coordinate, end.coordinate])
             let nearest = segment.closestCoordinate(to: point.coordinate)
-            let projected = nearest.map { MKMapPoint($0.coordinate) } ?? start
+            let candidate = nearest.map { MKMapPoint($0.coordinate) } ?? start
+            let offset = min(upper, max(lower, start.distance(to: candidate)))
+            let fraction = offset / segmentMeters
+            let projected = MKMapPoint(x: start.x + (end.x - start.x) * fraction,
+                                       y: start.y + (end.y - start.y) * fraction)
             let cross = point.distance(to: projected)
-            let along = completed + min(segmentMeters, start.distance(to: projected))
+            let along = completed + offset
             if let previousDistance, along >= previousDistance - 45,
                along <= previousDistance + maximumAdvance, cross < localDistance {
                 localDistance = cross
                 localProgress = along
+                localCoordinate = projected.coordinate
             }
             if cross < bestDistance {
                 bestDistance = cross
                 bestProgress = along
+                bestCoordinate = projected.coordinate
             }
             completed += segmentMeters
         }
         // Prefer continuity at crossings and parallel sections. If no plausible
         // local match exists, retain progress and report distance to the local corridor.
         if let previousDistance {
-            if localDistance.isFinite { return (localProgress, localDistance) }
-            return (previousDistance, .infinity)
+            if localDistance.isFinite { return (localProgress, localDistance, localCoordinate) }
+            return (previousDistance, .infinity, nil)
         }
-        return (bestProgress, bestDistance)
+        return (bestProgress, bestDistance, bestCoordinate)
     }
 }
