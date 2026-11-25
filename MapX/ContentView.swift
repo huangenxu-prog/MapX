@@ -558,7 +558,9 @@ struct ContentView: View {
         }
         .padding(8)
         .frame(maxWidth: .infinity, maxHeight: .infinity, alignment: .topLeading)
-        .background(panelBackground.ignoresSafeArea())
+        .background(panelBackground, in: RoundedRectangle(cornerRadius: 26, style: .continuous))
+        .clipShape(RoundedRectangle(cornerRadius: 26, style: .continuous))
+        .shadow(color: .black.opacity(0.12), radius: 8, y: 2)
     }
 
     private func arrivalPanel(_ place: SavedPlace) -> some View {
