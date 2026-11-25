@@ -41,6 +41,9 @@ jobs:
           packages:
             Navigation:
               path: ../navigation
+            Directions:
+              url: https://github.com/flitsmeister/mapbox-directions-swift
+              exactVersion: 0.23.5
           targets:
             CoreProbe:
               type: application
@@ -49,6 +52,8 @@ jobs:
               dependencies:
                 - package: Navigation
                   product: MapboxCoreNavigation
+                - package: Directions
+                  product: MapboxDirections
               settings:
                 base:
                   PRODUCT_BUNDLE_IDENTIFIER: com.mapx.coreprobe
