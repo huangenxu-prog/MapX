@@ -7,8 +7,8 @@ settings:
   base:
     SWIFT_VERSION: "5.9"
     TARGETED_DEVICE_FAMILY: "1"
-    MARKETING_VERSION: "1.0"
-    CURRENT_PROJECT_VERSION: "8"
+    MARKETING_VERSION: "2.0"
+    CURRENT_PROJECT_VERSION: "9"
 packages:
   Turf:
     url: https://github.com/flitsmeister/turf-swift
@@ -26,8 +26,8 @@ targets:
       path: MapX/Info.plist
       properties:
         CFBundleDisplayName: MapX
-        CFBundleShortVersionString: "1.0"
-        CFBundleVersion: "8"
+        CFBundleShortVersionString: "2.0"
+        CFBundleVersion: "9"
         NSLocationWhenInUseUsageDescription: "MapX 在地图显示和导航时使用位置；开始导航后锁屏仍会持续定位，以提供转向提示。"
         UIBackgroundModes:
           - location
