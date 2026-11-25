@@ -54,6 +54,25 @@ jobs:
                   PRODUCT_BUNDLE_IDENTIFIER: com.mapx.coreprobe
                   GENERATE_INFOPLIST_FILE: YES
                   CODE_SIGNING_ALLOWED: NO
+            CoreProbeTests:
+              type: bundle.unit-test
+              platform: iOS
+              sources: [Tests]
+              dependencies:
+                - target: CoreProbe
+                - package: Navigation
+                  product: MapboxCoreNavigation
+              settings:
+                base:
+                  GENERATE_INFOPLIST_FILE: YES
+                  PRODUCT_BUNDLE_IDENTIFIER: com.mapx.coreprobe.tests
+          schemes:
+            CoreProbe:
+              build:
+                targets:
+                  CoreProbe: all
+              test:
+                targets: [CoreProbeTests]
           YAML
           cat > Sources/Probe.swift <<'SWIFT'
           import SwiftUI
@@ -73,12 +92,37 @@ jobs:
           }
           SWIFT
           cp "$GITHUB_WORKSPACE/NavigationResearch/AppleRouteSnapshot.swift" Sources/
+          cp "$GITHUB_WORKSPACE/NavigationResearch/RouteProgressProbe.swift" Sources/
+          mkdir -p Tests
+          cat > Tests/RouteTests.swift <<'SWIFT'
+          import XCTest
+          import MapboxCoreNavigation
+          @testable import CoreProbe
+          final class RouteTests: XCTestCase {
+              func testSyntheticRouteProgress() throws {
+                  let route = try RouteProgressProbe.makeFixture()
+                  XCTAssertEqual(route.legs.count, 1)
+                  XCTAssertEqual(route.legs[0].steps.count, 1)
+                  let progress = RouteProgress(route: route)
+                  XCTAssertEqual(progress.distanceRemaining, 111, accuracy: 0.01)
+                  progress.currentLegProgress.currentStepProgress.distanceTraveled = 55.5
+                  XCTAssertEqual(progress.distanceRemaining, 55.5, accuracy: 0.01)
+                  XCTAssertEqual(progress.durationRemaining, 15, accuracy: 0.01)
+              }
+          }
+          SWIFT
           xcodegen generate
       - name: Compile core and MapKit together
         run: |
           set -o pipefail
           cd "$RUNNER_TEMP/probe"
           xcodebuild -project CoreProbe.xcodeproj -scheme CoreProbe -configuration Debug -destination 'generic/platform=iOS Simulator' CODE_SIGNING_ALLOWED=NO build | tee "$RUNNER_TEMP/core-probe.log"
+      - name: Run offline route progress tests
+        run: |
+          set -o pipefail
+          cd "$RUNNER_TEMP/probe"
+          DEVICE=$(xcrun simctl list devices available -j | python3 -c 'import sys,json; d=json.load(sys.stdin)["devices"]; print(next(x["udid"] for k,v in sorted(d.items(),reverse=True) if "iOS" in k for x in v if x["name"].startswith("iPhone")))')
+          xcodebuild -project CoreProbe.xcodeproj -scheme CoreProbe -configuration Debug -destination "id=$DEVICE" CODE_SIGNING_ALLOWED=NO -parallel-testing-enabled NO test | tee -a "$RUNNER_TEMP/core-probe.log"
       - uses: actions/upload-artifact@v4
         if: always()
         with:
