@@ -864,8 +864,11 @@ struct ContentView: View {
             errorMessage = "请允许定位后再开始导航。"
             return
         }
-        guard locationService.location != nil else {
-            errorMessage = "尚未获得 GPS 位置，请稍后重试。"
+        guard let fix = locationService.location,
+              abs(fix.timestamp.timeIntervalSinceNow) < 20,
+              (0...65).contains(fix.horizontalAccuracy) else {
+            locationService.requestLocation()
+            errorMessage = "尚未获得可靠的 GPS 位置，请稍后重试。"
             return
         }
         dismissKeyboard()
