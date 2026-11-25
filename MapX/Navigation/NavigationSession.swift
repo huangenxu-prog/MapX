@@ -58,6 +58,7 @@ final class NavigationSession: ObservableObject {
     @Published private(set) var remainingDistance: CLLocationDistance = 0
     @Published private(set) var needsReroute = 0
     @Published private(set) var arrived = false
+    @Published private(set) var displayCoordinate: CLLocationCoordinate2D?
     @Published private(set) var voiceEnabled: Bool
 
     /// Runs immediately when GPS confirms arrival; independent of view rendering.
@@ -110,6 +111,7 @@ final class NavigationSession: ObservableObject {
         destinationCoordinate = destination
         lastFix = nil
         matchedDistance = nil
+        displayCoordinate = nil
         matchedAt = nil
         firstFixAt = nil
         distanceToTurn = 0
@@ -129,6 +131,7 @@ final class NavigationSession: ObservableObject {
         destinationCoordinate = nil
         lastFix = nil
         matchedDistance = nil
+        displayCoordinate = nil
         matchedAt = nil
         firstFixAt = nil
         announced.removeAll()
@@ -156,6 +159,9 @@ final class NavigationSession: ObservableObject {
                                               maximumAdvance: advance)
         let matchTolerance = walking ? max(25, fix.horizontalAccuracy * 1.5) : max(45, fix.horizontalAccuracy * 1.5)
         let matched = progress.distanceFromRoute.isFinite && progress.distanceFromRoute <= matchTolerance
+        // Display-only snap: keep raw GPS for arrival and off-route decisions.
+        let displayTolerance = min(walking ? 18.0 : 30.0, max(8, fix.horizontalAccuracy * 1.5))
+        displayCoordinate = matched && progress.distanceFromRoute <= displayTolerance ? progress.matchedCoordinate : nil
         if matched {
             matchedDistance = progress.distanceAlongRoute
             matchedAt = fix.timestamp
@@ -217,6 +223,7 @@ final class NavigationSession: ObservableObject {
         destinationCoordinate = nil
         isActive = false
         arrived = true
+        displayCoordinate = nil
         offRouteSamples = 0
         arrivalSamples = 0
         onArrival?()
