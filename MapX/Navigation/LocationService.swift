@@ -43,11 +43,11 @@ final class LocationService: NSObject, ObservableObject, CLLocationManagerDelega
         }
     }
 
-    func setNavigating(_ active: Bool) {
+    func setNavigating(_ active: Bool, walking: Bool = false) {
         navigating = active
-        manager.activityType = .automotiveNavigation
+        manager.activityType = active && walking ? .fitness : .automotiveNavigation
         manager.desiredAccuracy = active ? kCLLocationAccuracyBestForNavigation : kCLLocationAccuracyBest
-        manager.distanceFilter = active ? 5 : 10
+        manager.distanceFilter = active ? (walking ? 2 : 5) : 10
         manager.pausesLocationUpdatesAutomatically = !active
         // The Info.plist explicitly declares UIBackgroundModes/location. Enable this
         // *only* for a user-started trip, never just because the app was opened.
@@ -80,7 +80,8 @@ final class LocationService: NSObject, ObservableObject, CLLocationManagerDelega
         guard let latest = locations.last,
               abs(latest.timestamp.timeIntervalSinceNow) < 20,
               latest.horizontalAccuracy >= 0,
-              latest.horizontalAccuracy <= 150 else { return }
+              latest.horizontalAccuracy <= 150,
+              location.map({ latest.timestamp > $0.timestamp }) ?? true else { return }
         location = latest
         if navigating {
             onNavigationLocationUpdate?(latest)
