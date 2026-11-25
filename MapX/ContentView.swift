@@ -98,10 +98,8 @@ struct ContentView: View {
                             }
                             .accessibilityLabel(guidance.voiceEnabled ? "关闭语音导航" : "开启语音导航")
                             .accessibilityIdentifier("mapx.voiceToggle")
-                            if exploring {
-                                Button { followUser() } label: { floatingIcon("location.fill") }
-                                    .accessibilityLabel("恢复导航跟随")
-                            }
+                            Button { followUser() } label: { floatingIcon(exploring ? "location.fill" : "location.north.line") }
+                                .accessibilityLabel("恢复导航跟随")
                         }
                     }
                     guidanceFooter(route)
@@ -613,31 +611,30 @@ struct ContentView: View {
     private func guidanceFooter(_ route: MKRoute) -> some View {
         let fraction = min(1, max(0, guidance.remainingDistance / max(1, route.distance)))
         let minutes = max(1, Int(ceil(route.expectedTravelTime * fraction / 60)))
-        return VStack(alignment: .leading, spacing: 12) {
+        return VStack(spacing: 12) {
             Capsule().fill(Color.secondary.opacity(0.35)).frame(width: 32, height: 4)
-                .frame(maxWidth: .infinity)
-            HStack(alignment: .center, spacing: 16) {
-                VStack(alignment: .leading, spacing: 5) {
-                    Text("\(minutes) 分钟")
-                        .font(.system(size: 30, weight: .bold)).monospacedDigit()
-                        .foregroundStyle(Color(red: 0.06, green: 0.48, blue: 0.32))
-                    Text("\(formattedDistance(guidance.remainingDistance)) · 预计 \(Date.now.addingTimeInterval(Double(minutes) * 60).formatted(date: .omitted, time: .shortened)) 到达")
-                        .font(.subheadline).foregroundStyle(.secondary)
-                    Text(destination?.name ?? "目的地")
-                        .font(.caption).foregroundStyle(.secondary).lineLimit(1)
+            HStack(spacing: 14) {
+                VStack(alignment: .leading, spacing: 4) {
+                    Text("\(minutes) 分钟").font(.system(size: 23, weight: .bold)).monospacedDigit()
+                    Text(formattedDistance(guidance.remainingDistance)).font(.subheadline).foregroundStyle(.secondary)
+                }
+                Spacer(minLength: 0)
+                VStack(alignment: .leading, spacing: 4) {
+                    Text(Date.now.addingTimeInterval(Double(minutes) * 60).formatted(date: .omitted, time: .shortened))
+                        .font(.system(size: 23, weight: .bold)).monospacedDigit()
+                    Text("预计到达").font(.caption).foregroundStyle(.secondary)
                 }
                 Spacer(minLength: 0)
                 Button { stopNavigation() } label: {
-                    Image(systemName: "xmark")
-                        .font(.system(size: 18, weight: .bold))
-                        .frame(width: 48, height: 48)
-                        .background(Color.secondary.opacity(0.12), in: Circle())
+                    Text("结束").font(.subheadline.bold())
+                        .padding(.horizontal, 16).padding(.vertical, 13)
+                        .foregroundStyle(.white).background(Color.red, in: Capsule())
                 }
-                .foregroundStyle(.primary)
+                .buttonStyle(.plain)
                 .accessibilityLabel("结束导航")
             }
         }
-        .padding(18)
+        .padding(16)
         .background(panelBackground, in: RoundedRectangle(cornerRadius: 24))
         .shadow(color: .black.opacity(0.12), radius: 8, y: 2)
     }
@@ -721,8 +718,8 @@ struct ContentView: View {
             Label(title, systemImage: symbol)
                 .font(.subheadline.weight(.semibold))
                 .frame(maxWidth: .infinity).padding(.vertical, 12)
-                .foregroundStyle(walking == value ? Color.blue : Color.primary)
-                .background(walking == value ? Color.blue.opacity(0.13) : Color.secondary.opacity(0.08), in: RoundedRectangle(cornerRadius: 12))
+                .foregroundStyle(walking == value ? Color.white : Color.primary)
+                .background(walking == value ? Color.blue : Color.secondary.opacity(0.08), in: RoundedRectangle(cornerRadius: 12))
         }
         .buttonStyle(.plain)
         .accessibilityAddTraits(walking == value ? .isSelected : [])
