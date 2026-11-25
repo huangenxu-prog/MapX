@@ -1,7 +1,7 @@
 name: iOS Build
 on:
   push:
-    branches: [main, experiment/navigation-core]
+    branches: [experiment/navigation-refinement]
   workflow_dispatch:
 
 jobs:
@@ -37,7 +37,7 @@ jobs:
           test -d "$APP"
           /usr/libexec/PlistBuddy -c "Print :UILaunchScreen" "$APP/Info.plist"
           plutil -lint "$APP/Info.plist"
-          test "$(/usr/libexec/PlistBuddy -c 'Print :CFBundleVersion' "$APP/Info.plist")" = "9"
+          test "$(/usr/libexec/PlistBuddy -c 'Print :CFBundleVersion' "$APP/Info.plist")" = "10"
           /usr/libexec/PlistBuddy -c "Print :UIBackgroundModes" "$APP/Info.plist" | grep -q location
           /usr/libexec/PlistBuddy -c "Print :UIBackgroundModes" "$APP/Info.plist" | grep -q audio
           cp MapX/ThirdParty/Turf-LICENSE.txt "$APP/Turf-LICENSE.txt"
