@@ -16,6 +16,7 @@ struct ContentView: View {
     @State private var destination: MKMapItem?
     @State private var routes: [MKRoute] = []
     @State private var selectedRouteIndex = 0
+    @State private var walking = false
     @State private var searchTask: Task<Void, Never>?
     @State private var routeTask: Task<Void, Never>?
     @State private var isSearching = false
@@ -144,6 +145,20 @@ struct ContentView: View {
                     searchBar
                     if showingResults { searchResultsView }
                     else if searchFocused && query.isEmpty { savedPlacesPanel }
+                    if destination != nil && !showingResults {
+                        Picker("出行方式", selection: $walking) {
+                            Label("驾车", systemImage: "car.fill").tag(false)
+                            Label("步行", systemImage: "figure.walk").tag(true)
+                        }
+                        .pickerStyle(.segmented)
+                        .padding(8)
+                        .background(.regularMaterial, in: RoundedRectangle(cornerRadius: 14))
+                        .onChange(of: walking) { _, _ in
+                            routes = []
+                            selectedRouteIndex = 0
+                            planRoute()
+                        }
+                    }
                     Spacer(minLength: 12)
                     HStack(alignment: .bottom, spacing: 12) {
                         if let selectedRoute { routePanel(selectedRoute) }
@@ -530,20 +545,21 @@ struct ContentView: View {
     private func planRoute(from fix: CLLocation? = nil, continueNavigation: Bool = false) {
         guard let destination else { return }
         routeTask?.cancel()
+        let requestedWalking = walking
         routeTask = Task {
             isRouting = true
             defer { if !Task.isCancelled { isRouting = false } }
             let request = MKDirections.Request()
             request.source = fix.map { MKMapItem(placemark: MKPlacemark(coordinate: $0.coordinate)) } ?? .forCurrentLocation()
             request.destination = destination
-            request.transportType = .automobile
+            request.transportType = requestedWalking ? .walking : .automobile
             request.requestsAlternateRoutes = true
 
             do {
                 let response = try await MKDirections(request: request).calculate()
                 guard !Task.isCancelled else { return }
                 guard !response.routes.isEmpty else {
-                    errorMessage = "未找到驾车路线"
+                    errorMessage = requestedWalking ? "未找到步行路线" : "未找到驾车路线"
                     return
                 }
                 routes = response.routes
@@ -578,7 +594,7 @@ struct ContentView: View {
     }
 
     private func startNavigation() {
-        guard let selectedRoute, let destination else { return }
+        guard !isRouting, let selectedRoute, let destination else { return }
         guard locationService.isAuthorized else {
             locationService.requestLocation()
             errorMessage = "请允许定位后再开始导航。"
@@ -591,8 +607,8 @@ struct ContentView: View {
         dismissKeyboard()
         showingResults = false
         followUser()
-        guidance.start(selectedRoute, destination: destination.placemark.coordinate)
-        locationService.setNavigating(true)
+        guidance.start(selectedRoute, destination: destination.placemark.coordinate, walking: walking)
+        locationService.setNavigating(true, walking: walking)
         if let fix = locationService.location {
             guidance.update(fix)
         }
