@@ -57,14 +57,9 @@ struct ContentView: View {
                     Marker(item: destination).tint(.red)
                 }
                 ForEach(routes.indices, id: \.self) { index in
-                    if !guidance.isActive || index == selectedRouteIndex {
-                    if guidance.isActive {
-                        MapPolyline(routes[index].polyline).stroke(.white.opacity(0.82), lineWidth: 10)
-                    }
                     MapPolyline(routes[index].polyline)
                         .stroke(index == selectedRouteIndex ? Color.blue : Color.gray.opacity(0.5),
                                 lineWidth: index == selectedRouteIndex ? 7 : 4)
-                    }
                 }
             }
             .simultaneousGesture(MagnifyGesture().onChanged { _ in
@@ -130,7 +125,7 @@ struct ContentView: View {
                         metric(Date.now.addingTimeInterval(Double(minutes) * 60)
                             .formatted(date: .omitted, time: .shortened), "到达")
                         metric(String(minutes), "分钟")
-                        metric(String(format: "%.1f", guidance.remainingDistance / 1000), "公里")
+                        metric(guidance.remainingDistance < 1000 ? String(Int(guidance.remainingDistance.rounded())) : String(format: "%.1f", guidance.remainingDistance / 1000), guidance.remainingDistance < 1000 ? "米" : "公里")
                         Button { stopNavigation() } label: {
                             Image(systemName: "xmark").font(.headline)
                                 .frame(width: 44, height: 44)
@@ -546,18 +541,20 @@ struct ContentView: View {
         guard let destination else { return }
         routeTask?.cancel()
         let requestedWalking = walking
+        isRouting = true
         routeTask = Task {
-            isRouting = true
             defer { if !Task.isCancelled { isRouting = false } }
             let request = MKDirections.Request()
-            request.source = fix.map { MKMapItem(placemark: MKPlacemark(coordinate: $0.coordinate)) } ?? .forCurrentLocation()
+            request.source = (fix ?? locationService.location).map { MKMapItem(placemark: MKPlacemark(coordinate: $0.coordinate)) } ?? .forCurrentLocation()
             request.destination = destination
             request.transportType = requestedWalking ? .walking : .automobile
             request.requestsAlternateRoutes = true
 
             do {
                 let response = try await MKDirections(request: request).calculate()
-                guard !Task.isCancelled else { return }
+                guard !Task.isCancelled, requestedWalking == walking,
+                      self.destination === destination,
+                      !continueNavigation || guidance.isActive else { return }
                 guard !response.routes.isEmpty else {
                     errorMessage = requestedWalking ? "未找到步行路线" : "未找到驾车路线"
                     return
