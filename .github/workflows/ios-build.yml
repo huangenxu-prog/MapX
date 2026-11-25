@@ -4,6 +4,10 @@ on:
     branches: [experiment/navigation-refinement]
   workflow_dispatch:
 
+concurrency:
+  group: mapx-ios-${{ github.ref }}
+  cancel-in-progress: true
+
 jobs:
   build:
     runs-on: macos-15
@@ -37,7 +41,8 @@ jobs:
           test -d "$APP"
           /usr/libexec/PlistBuddy -c "Print :UILaunchScreen" "$APP/Info.plist"
           plutil -lint "$APP/Info.plist"
-          test "$(/usr/libexec/PlistBuddy -c 'Print :CFBundleVersion' "$APP/Info.plist")" = "10"
+          EXPECTED_BUILD=$(awk '/CURRENT_PROJECT_VERSION:/ {gsub(/"/,"",$2); print $2; exit}' project.yml)
+          test "$(/usr/libexec/PlistBuddy -c 'Print :CFBundleVersion' "$APP/Info.plist")" = "$EXPECTED_BUILD"
           /usr/libexec/PlistBuddy -c "Print :UIBackgroundModes" "$APP/Info.plist" | grep -q location
           /usr/libexec/PlistBuddy -c "Print :UIBackgroundModes" "$APP/Info.plist" | grep -q audio
           cp MapX/ThirdParty/Turf-LICENSE.txt "$APP/Turf-LICENSE.txt"
