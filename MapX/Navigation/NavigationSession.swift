@@ -70,6 +70,10 @@ final class NavigationSession: ObservableObject {
     private var offRouteSamples = 0
     private var arrivalSamples = 0
     private var lastRerouteAt = Date.distantPast
+    private var lastFix: CLLocation?
+    private var matchedDistance: CLLocationDistance?
+    private var matchedAt: Date?
+    private var walking = false
 
     init() {
         voiceEnabled = UserDefaults.standard.object(forKey: "mapx.voiceEnabled") as? Bool ?? true
@@ -84,9 +88,11 @@ final class NavigationSession: ObservableObject {
         else if isActive { voice.say("语音导航已开启") }
     }
 
-    func start(_ newRoute: MKRoute, destination: CLLocationCoordinate2D) {
+    func start(_ newRoute: MKRoute, destination: CLLocationCoordinate2D, walking: Bool = false) {
         stop()
         arrived = false
+        self.walking = walking
+        lastRerouteAt = .distantPast
         route = newRoute
         destinationCoordinate = destination
         isActive = true
@@ -101,6 +107,9 @@ final class NavigationSession: ObservableObject {
         guard isActive else { return }
         route = newRoute
         destinationCoordinate = destination
+        lastFix = nil
+        matchedDistance = nil
+        matchedAt = nil
         announced.removeAll()
         offRouteSamples = 0
         arrivalSamples = 0
@@ -128,19 +137,33 @@ final class NavigationSession: ObservableObject {
               fix.horizontalAccuracy >= 0, fix.horizontalAccuracy <= 65,
               abs(fix.timestamp.timeIntervalSinceNow) < 20 else { return }
 
-        let progress = RouteGeometry.progress(on: route, location: fix)
-        remainingDistance = progress.remainingDistance
-        distanceToTurn = progress.distanceToNextTurn
+        guard lastFix.map({ fix.timestamp > $0.timestamp }) ?? true else { return }
+        lastFix = fix
+        let elapsed = max(1, fix.timestamp.timeIntervalSince(matchedAt ?? fix.timestamp))
+        let speedLimit = walking ? 4.0 : 55.0
+        let measuredSpeed = fix.speed >= 0 ? min(speedLimit, fix.speed) : speedLimit
+        let advance = max(35, min(800, elapsed * max(walking ? 2 : 8, measuredSpeed) * 1.8 + fix.horizontalAccuracy * 2))
+        let progress = RouteGeometry.progress(on: route, location: fix,
+                                              previousDistance: matchedDistance ?? 0,
+                                              maximumAdvance: advance)
+        let matchTolerance = walking ? max(25, fix.horizontalAccuracy * 1.5) : max(45, fix.horizontalAccuracy * 1.5)
+        let matched = progress.distanceFromRoute.isFinite && progress.distanceFromRoute <= matchTolerance
+        if matched {
+            matchedDistance = progress.distanceAlongRoute
+            matchedAt = fix.timestamp
+            remainingDistance = progress.remainingDistance
+            distanceToTurn = progress.distanceToNextTurn
+        }
 
         // Avoid false arrival caused by the route passing near the destination
         // earlier, GPS jumps, or an inaccurate fix. Require two close, slow fixes.
         if let endpoint = destinationCoordinate {
             let metersToDestination = fix.distance(from:
                 CLLocation(latitude: endpoint.latitude, longitude: endpoint.longitude))
-            let slowEnough = fix.speed < 0 || fix.speed < 8
-            if metersToDestination < 40 &&
+            let slowEnough = fix.speed >= 0 && fix.speed < (walking ? 3 : 8)
+            if matched && metersToDestination < (walking ? 25 : 40) &&
                 progress.distanceFromRoute < 55 &&
-                progress.remainingDistance < 150 &&
+                progress.remainingDistance < (walking ? 50 : 100) &&
                 fix.horizontalAccuracy <= 35 && slowEnough {
                 arrivalSamples += 1
             } else {
@@ -152,26 +175,26 @@ final class NavigationSession: ObservableObject {
             }
         }
 
-        if let stepIndex = progress.nextStepIndex {
+        if matched, let stepIndex = progress.nextStepIndex {
             let instruction = route.steps[stepIndex].instructions
             nextInstruction = instruction
-            if (90..<400).contains(progress.distanceToNextTurn) {
+            if progress.distanceToNextTurn >= (walking ? 20 : 90) && progress.distanceToNextTurn < (walking ? 100 : 400) {
                 speakOnce("approach-\(stepIndex)",
                           text: "前方\(Int(progress.distanceToNextTurn))米，\(instruction)")
             }
-            if progress.distanceToNextTurn < 90 {
+            if progress.distanceToNextTurn < (walking ? 20 : 90) {
                 speakOnce("near-\(stepIndex)", text: instruction)
             }
-        } else {
-            nextInstruction = "继续行驶至目的地"
+        } else if matched {
+            nextInstruction = walking ? "继续步行至目的地" : "继续行驶至目的地"
         }
 
-        if progress.distanceFromRoute > 130 && max(0, fix.speed) > 2 {
+        if progress.distanceFromRoute > max(walking ? 40 : 90, fix.horizontalAccuracy * 2) && max(0, fix.speed) > (walking ? 0.5 : 2) {
             offRouteSamples += 1
         } else {
             offRouteSamples = 0
         }
-        if offRouteSamples >= 4, Date().timeIntervalSince(lastRerouteAt) > 30 {
+        if offRouteSamples >= 4, Date().timeIntervalSince(lastRerouteAt) > (walking ? 20 : 30) {
             lastRerouteAt = Date()
             offRouteSamples = 0
             needsReroute += 1
