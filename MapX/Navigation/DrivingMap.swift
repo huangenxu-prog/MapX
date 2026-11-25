@@ -37,7 +37,7 @@ struct DrivingMap: UIViewRepresentable {
                 map.addAnnotation(pin)
             }
         }
-        if let fix { driver.course.update(fix) }
+        if let fix { driver.course.update(fix); driver.speed = max(0, fix.speed) }
         if driver.exploring && !exploring { driver.lastCenter = nil }
         driver.exploring = exploring
         driver.follow(map)
@@ -47,10 +47,13 @@ struct DrivingMap: UIViewRepresentable {
         var line: MKPolyline?
         var pin: MKPointAnnotation?
         var course = DrivingCourse()
+        var speed: CLLocationSpeed = 0
         var exploring = false
         var onExplore: (() -> Void)?
         var lastCenter: MKMapPoint?
         private var lastHeading: Double = 0
+        private var lastDistance: CLLocationDistance = 700
+        private var lastCameraUpdate = Date.distantPast
         private var manualGesture = false
 
         func follow(_ map: MKMapView) {
@@ -58,14 +61,21 @@ struct DrivingMap: UIViewRepresentable {
             guard !exploring, !manualGesture, user.location != nil,
                   CLLocationCoordinate2DIsValid(user.coordinate) else { return }
             let point = MKMapPoint(user.coordinate)
-            let heading = course.degrees
+            let heading = course.hasHeading ? course.degrees : map.camera.heading
+            let desiredDistance = min(1100, max(350, 350 + speed * 22))
+            let distance = lastCenter == nil ? desiredDistance : lastDistance + (desiredDistance - lastDistance) * 0.2
             let angle = abs((heading - lastHeading + 540).truncatingRemainder(dividingBy: 360) - 180)
-            if let lastCenter, lastCenter.distance(to: point) < 1, angle < 2 { return }
+            if let lastCenter {
+                if Date().timeIntervalSince(lastCameraUpdate) < 0.25 { return }
+                if lastCenter.distance(to: point) < 2, angle < 3, abs(distance - lastDistance) < 20 { return }
+            }
             let animate = lastCenter != nil
             lastCenter = point
             lastHeading = heading
+            lastDistance = distance
+            lastCameraUpdate = Date()
             if map.userTrackingMode != .none { map.setUserTrackingMode(.none, animated: false) }
-            let camera = MKMapCamera(lookingAtCenter: user.coordinate, fromDistance: 700,
+            let camera = MKMapCamera(lookingAtCenter: user.coordinate, fromDistance: distance,
                                      pitch: 35, heading: heading)
             map.setCamera(camera, animated: animate)
         }
@@ -82,7 +92,7 @@ struct DrivingMap: UIViewRepresentable {
         func mapView(_ map: MKMapView, regionWillChangeAnimated animated: Bool) {
             if interacting(map) {
                 manualGesture = true
-                onExplore?()
+                DispatchQueue.main.async { [weak self] in self?.onExplore?() }
             }
         }
 
