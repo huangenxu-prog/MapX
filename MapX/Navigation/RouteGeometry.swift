@@ -1,5 +1,6 @@
 import MapKit
 import CoreLocation
+import Turf
 
 struct RouteProgress {
     let remainingDistance: CLLocationDistance
@@ -9,8 +10,8 @@ struct RouteProgress {
     let distanceToNextTurn: CLLocationDistance
 }
 
-/// Polyline measurements are performed in map coordinates and converted to meters.
-/// This is an approximation, not lane-level or road-elevation matching.
+/// Turf provides the nearest point on each segment; continuity bounds prevent
+/// jumps at crossings. This is not lane-level or road-elevation matching.
 enum RouteGeometry {
     static func progress(on route: MKRoute, location: CLLocation, previousDistance: CLLocationDistance? = nil, maximumAdvance: CLLocationDistance = 100) -> RouteProgress {
         let current = MKMapPoint(location.coordinate)
@@ -58,17 +59,19 @@ enum RouteGeometry {
         for index in 0..<(line.pointCount - 1) {
             let start = points[index]
             let end = points[index + 1]
-            let dx = end.x - start.x
-            let dy = end.y - start.y
-            let squared = dx * dx + dy * dy
-            let fraction = squared > 0
-                ? max(0, min(1, ((point.x - start.x) * dx + (point.y - start.y) * dy) / squared))
-                : 0
-            let projected = MKMapPoint(x: start.x + fraction * dx,
-                                       y: start.y + fraction * dy)
-            let cross = point.distance(to: projected)
             let segmentMeters = start.distance(to: end)
-            let along = completed + fraction * segmentMeters
+            // Skip segments outside the plausible progress corridor.
+            if let previousDistance,
+               completed + segmentMeters < previousDistance - 45 ||
+               completed > previousDistance + maximumAdvance {
+                completed += segmentMeters
+                continue
+            }
+            let segment = LineString([start.coordinate, end.coordinate])
+            let nearest = segment.closestCoordinate(to: point.coordinate)
+            let projected = nearest.map { MKMapPoint($0.coordinate) } ?? start
+            let cross = point.distance(to: projected)
+            let along = completed + min(segmentMeters, start.distance(to: projected))
             if let previousDistance, along >= previousDistance - 45,
                along <= previousDistance + maximumAdvance, cross < localDistance {
                 localDistance = cross
@@ -76,7 +79,7 @@ enum RouteGeometry {
             }
             if cross < bestDistance {
                 bestDistance = cross
-                bestProgress = completed + fraction * segmentMeters
+                bestProgress = along
             }
             completed += segmentMeters
         }
