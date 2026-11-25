@@ -45,6 +45,7 @@ struct ContentView: View {
         ZStack {
             if guidance.isActive, let route = selectedRoute {
                 DrivingMap(route: route, destination: destination, fix: locationService.location,
+                           displayCoordinate: guidance.displayCoordinate, walking: walking,
                            exploring: exploring, onExplore: {
                     exploring = true
                     scheduleFollowRecovery()
