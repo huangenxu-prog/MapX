@@ -1,0 +1,85 @@
+name: Navigation core compatibility probe
+on:
+  push:
+    branches: [experiment/navigation-core]
+    paths:
+      - '.github/workflows/navigation-core-probe.yml'
+  workflow_dispatch:
+permissions:
+  contents: read
+jobs:
+  probe:
+    runs-on: macos-15
+    timeout-minutes: 30
+    steps:
+      - uses: actions/checkout@v4
+      - name: Fetch pinned upstream
+        run: |
+          git clone https://github.com/maplibre/maplibre-navigation-ios.git "$RUNNER_TEMP/navigation"
+          git -C "$RUNNER_TEMP/navigation" checkout 264af37aafc257d96090576a836ccbe03448e9d6
+          test -s "$RUNNER_TEMP/navigation/LICENSE.md"
+          cd "$RUNNER_TEMP/navigation"
+          python3 - <<'PY'
+          from pathlib import Path
+          p = Path("Package.swift")
+          s = p.read_text()
+          marker = "products: ["
+          assert s.count(marker) == 1
+          p.write_text(s.replace(marker, marker + '\n        .library(name: "MapboxCoreNavigation", targets: ["MapboxCoreNavigation"]),', 1))
+          PY
+      - name: Generate isolated iOS probe
+        run: |
+          brew install xcodegen
+          mkdir -p "$RUNNER_TEMP/probe/Sources"
+          cd "$RUNNER_TEMP/probe"
+          cat > project.yml <<'YAML'
+          name: CoreProbe
+          options:
+            deploymentTarget:
+              iOS: "17.0"
+          packages:
+            Navigation:
+              path: ../navigation
+          targets:
+            CoreProbe:
+              type: application
+              platform: iOS
+              sources: [Sources]
+              dependencies:
+                - package: Navigation
+                  product: MapboxCoreNavigation
+              settings:
+                base:
+                  PRODUCT_BUNDLE_IDENTIFIER: com.mapx.coreprobe
+                  GENERATE_INFOPLIST_FILE: YES
+                  CODE_SIGNING_ALLOWED: NO
+          YAML
+          cat > Sources/Probe.swift <<'SWIFT'
+          import SwiftUI
+          import MapKit
+          import MapboxCoreNavigation
+
+          @main
+          struct CoreProbeApp: App {
+              var body: some Scene {
+                  WindowGroup { Map() }
+              }
+          }
+
+          // Compile-time coexistence check only. No routing requests or GPS.
+          func probe(_ appleRoute: MKRoute, _ core: RouteController) -> Double {
+              appleRoute.distance + (core.location?.horizontalAccuracy ?? 0)
+          }
+          SWIFT
+          xcodegen generate
+      - name: Compile core and MapKit together
+        run: |
+          set -o pipefail
+          cd "$RUNNER_TEMP/probe"
+          xcodebuild -project CoreProbe.xcodeproj -scheme CoreProbe -configuration Debug -destination 'generic/platform=iOS Simulator' CODE_SIGNING_ALLOWED=NO build | tee "$RUNNER_TEMP/core-probe.log"
+      - uses: actions/upload-artifact@v4
+        if: always()
+        with:
+          name: core-probe-log
+          path: ${{ runner.temp }}/core-probe.log
+          if-no-files-found: warn
