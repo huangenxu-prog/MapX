@@ -73,6 +73,7 @@ final class NavigationSession: ObservableObject {
     private var lastFix: CLLocation?
     private var matchedDistance: CLLocationDistance?
     private var matchedAt: Date?
+    private var firstFixAt: Date?
     private var walking = false
 
     init() {
@@ -98,7 +99,7 @@ final class NavigationSession: ObservableObject {
         isActive = true
         remainingDistance = newRoute.distance
         nextInstruction = newRoute.steps.first(where: { !$0.instructions.isEmpty })?.instructions
-            ?? "沿当前路线行驶"
+            ?? (walking ? "沿当前路线步行" : "沿当前路线行驶")
         voice.say("开始导航")
     }
 
@@ -110,6 +111,8 @@ final class NavigationSession: ObservableObject {
         lastFix = nil
         matchedDistance = nil
         matchedAt = nil
+        firstFixAt = nil
+        distanceToTurn = 0
         announced.removeAll()
         offRouteSamples = 0
         arrivalSamples = 0
@@ -124,6 +127,10 @@ final class NavigationSession: ObservableObject {
         isActive = false
         route = nil
         destinationCoordinate = nil
+        lastFix = nil
+        matchedDistance = nil
+        matchedAt = nil
+        firstFixAt = nil
         announced.removeAll()
         offRouteSamples = 0
         arrivalSamples = 0
@@ -139,9 +146,10 @@ final class NavigationSession: ObservableObject {
 
         guard lastFix.map({ fix.timestamp > $0.timestamp }) ?? true else { return }
         lastFix = fix
-        let elapsed = max(1, fix.timestamp.timeIntervalSince(matchedAt ?? fix.timestamp))
+        if firstFixAt == nil { firstFixAt = fix.timestamp }
+        let elapsed = max(1, fix.timestamp.timeIntervalSince(matchedAt ?? firstFixAt ?? fix.timestamp))
         let speedLimit = walking ? 4.0 : 55.0
-        let measuredSpeed = fix.speed >= 0 ? min(speedLimit, fix.speed) : speedLimit
+        let measuredSpeed = fix.speed >= 0 ? min(speedLimit, fix.speed) : (walking ? 2.0 : 12.0)
         let advance = max(35, min(800, elapsed * max(walking ? 2 : 8, measuredSpeed) * 1.8 + fix.horizontalAccuracy * 2))
         let progress = RouteGeometry.progress(on: route, location: fix,
                                               previousDistance: matchedDistance ?? 0,
