@@ -14,6 +14,8 @@ struct ContentView: View {
     @State private var searchResults: [MKMapItem] = []
     @State private var showingResults = false
     @State private var searchingPage = false
+    private enum SearchPurpose { case destination, home, work }
+    @State private var searchPurpose: SearchPurpose = .destination
     @State private var arrivalPlace: SavedPlace?
     @State private var satellite = false
     @State private var showRecent = true
@@ -61,6 +63,8 @@ struct ContentView: View {
                 UserAnnotation()
                 if let destination {
                     Marker(item: destination).tint(.red)
+                } else if let place = arrivalPlace {
+                    Marker(item: place.mapItem).tint(.red)
                 }
                 ForEach(routes.indices, id: \.self) { index in
                     MapPolyline(routes[index].polyline)
@@ -133,13 +137,13 @@ struct ContentView: View {
                     .buttonStyle(.plain)
                     HStack(spacing: 8) {
                         shortcut("家", symbol: "house.fill", detail: savedPlaces.home?.name ?? "设置地点") {
-                            if let home = savedPlaces.home { select(home.mapItem) } else { openSearch() }
+                            if let home = savedPlaces.home { select(home.mapItem) } else { openSearch(.home) }
                         }
                         shortcut("公司", symbol: "briefcase.fill", detail: savedPlaces.work?.name ?? "设置地点") {
-                            if let work = savedPlaces.work { select(work.mapItem) } else { openSearch() }
+                            if let work = savedPlaces.work { select(work.mapItem) } else { openSearch(.work) }
                         }
                         shortcut("最近", symbol: "clock", detail: "\(savedPlaces.recent.count) 个地点") {
-                            showRecent.toggle()
+                            if savedPlaces.recent.isEmpty { openSearch() } else { showRecent.toggle() }
                         }
                     }
                     Spacer(minLength: 0)
@@ -216,6 +220,9 @@ struct ContentView: View {
                 let place = destination.map { SavedPlace(item: $0) }
                 stopNavigation()
                 arrivalPlace = place
+                if let place {
+                    camera = .region(MKCoordinateRegion(center: place.mapItem.placemark.coordinate, latitudinalMeters: 800, longitudinalMeters: 800))
+                }
             }
         }
         .alert("提示", isPresented: Binding(
@@ -434,7 +441,8 @@ struct ContentView: View {
 
     private var recentQueries: [String] { recentQueryData.split(separator: "\n").map(String.init) }
 
-    private func openSearch() {
+    private func openSearch(_ purpose: SearchPurpose = .destination) {
+        searchPurpose = purpose
         query = ""
         searchResults = []
         showingResults = false
@@ -447,6 +455,7 @@ struct ContentView: View {
         isSearching = false
         searchFocused = false
         searchingPage = false
+        searchPurpose = .destination
         showingResults = false
         searchResults = []
         query = ""
@@ -502,6 +511,9 @@ struct ContentView: View {
                     }
                 }.padding(12).background(Color.secondary.opacity(0.12), in: RoundedRectangle(cornerRadius: 14))
                 Button("取消") { cancelSearch() }
+            }
+            if searchPurpose != .destination {
+                Text(searchPurpose == .home ? "选择家的位置" : "选择公司的位置").font(.headline)
             }
             ScrollView {
                 VStack(alignment: .leading, spacing: 0) {
@@ -768,6 +780,13 @@ struct ContentView: View {
     }
 
     private func select(_ item: MKMapItem) {
+        if searchingPage && searchPurpose != .destination {
+            let place = SavedPlace(item: item)
+            if searchPurpose == .home { savedPlaces.markHome(place) } else { savedPlaces.markWork(place) }
+            cancelSearch()
+            searchPurpose = .destination
+            return
+        }
         dismissKeyboard()
         stopNavigation()
         savedPlaces.add(item)
