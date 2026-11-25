@@ -81,99 +81,48 @@ struct ContentView: View {
             .ignoresSafeArea()
             }
 
-            VStack(spacing: 12) {
+            VStack(spacing: 10) {
                 if guidance.isActive, let route = selectedRoute {
-                    HStack(spacing: 16) {
-                        Image(systemName: maneuverSymbol)
-                            .font(.system(size: 35, weight: .bold))
-                            .accessibilityHidden(true)
-                        VStack(alignment: .leading, spacing: 3) {
-                            Text(formattedDistance(guidance.distanceToTurn))
-                                .font(.title.bold()).monospacedDigit()
-                            Text(guidance.nextInstruction)
-                                .font(.headline).lineLimit(3)
+                    guidanceHeader
+                    Spacer(minLength: 0)
+                    HStack {
+                        Spacer()
+                        VStack(spacing: 12) {
+                            Button { guidance.setVoiceEnabled(!guidance.voiceEnabled) } label: {
+                                floatingIcon(guidance.voiceEnabled ? "speaker.wave.2.fill" : "speaker.slash.fill")
+                            }
+                            .accessibilityLabel(guidance.voiceEnabled ? "关闭语音导航" : "开启语音导航")
+                            .accessibilityIdentifier("mapx.voiceToggle")
+                            if exploring {
+                                Button { followUser() } label: { floatingIcon("location.fill") }
+                                    .accessibilityLabel("恢复导航跟随")
+                            }
                         }
-                        Spacer(minLength: 0)
-                        Button {
-                            guidance.setVoiceEnabled(!guidance.voiceEnabled)
-                        } label: {
-                            Image(systemName: guidance.voiceEnabled
-                                  ? "speaker.wave.2.fill" : "speaker.slash.fill")
-                                .font(.system(size: 18, weight: .semibold))
-                                .frame(width: 44, height: 44)
-                                .background(.white.opacity(0.14), in: Circle())
-                        }
-                        .accessibilityLabel(guidance.voiceEnabled ? "关闭语音导航" : "开启语音导航")
-                        .accessibilityIdentifier("mapx.voiceToggle")
                     }
-                    .padding(16)
-                    .foregroundStyle(.white)
-                    .background(Color(red: 0.07, green: 0.10, blue: 0.17).opacity(0.96),
-                                in: RoundedRectangle(cornerRadius: 24))
-                    Spacer()
-                    if exploring {
-                        Button { followUser() } label: {
-                            Image(systemName: "location.fill")
-                                .frame(width: 46, height: 46)
-                                .background(.regularMaterial, in: Circle())
-                        }
-                        .accessibilityLabel("恢复导航跟随")
-                        .frame(maxWidth: .infinity, alignment: .leading)
-                    }
-                    let fraction = min(1, guidance.remainingDistance / max(1, route.distance))
-                    let minutes = max(1, Int(ceil(route.expectedTravelTime * fraction / 60)))
-                    HStack(spacing: 4) {
-                        metric(Date.now.addingTimeInterval(Double(minutes) * 60)
-                            .formatted(date: .omitted, time: .shortened), "到达")
-                        metric(String(minutes), "分钟")
-                        metric(guidance.remainingDistance < 1000 ? String(Int(guidance.remainingDistance.rounded())) : String(format: "%.1f", guidance.remainingDistance / 1000), guidance.remainingDistance < 1000 ? "米" : "公里")
-                        Button { stopNavigation() } label: {
-                            Image(systemName: "xmark").font(.headline)
-                                .frame(width: 44, height: 44)
-                                .background(.white.opacity(0.14), in: Circle())
-                        }
-                        .accessibilityLabel("结束导航")
-                    }
-                    .padding(12)
-                    .foregroundStyle(.white)
-                    .background(Color(red: 0.07, green: 0.10, blue: 0.17).opacity(0.96), in: RoundedRectangle(cornerRadius: 24))
+                    guidanceFooter(route)
+                } else if destination != nil && !showingResults {
+                    searchBar
+                    Spacer(minLength: 0)
+                    HStack { Spacer(); locateButton }
+                    routePanel
                 } else {
                     searchBar
                     if showingResults { searchResultsView }
-                    else if searchFocused && query.isEmpty { savedPlacesPanel }
-                    if destination != nil && !showingResults {
-                        Picker("出行方式", selection: $walking) {
-                            Label("驾车", systemImage: "car.fill").tag(false)
-                            Label("步行", systemImage: "figure.walk").tag(true)
-                        }
-                        .pickerStyle(.segmented)
-                        .padding(8)
-                        .background(.regularMaterial, in: RoundedRectangle(cornerRadius: 14))
-                        .onChange(of: walking) { _, _ in
-                            routes = []
-                            selectedRouteIndex = 0
-                            planRoute()
-                        }
-                    }
-                    Spacer(minLength: 12)
-                    HStack(alignment: .bottom, spacing: 12) {
-                        if let selectedRoute { routePanel(selectedRoute) }
-                        else { Spacer(minLength: 0) }
-                        locateButton
-                    }
+                    else { savedPlacesPanel }
+                    Spacer(minLength: 0)
+                    HStack { Spacer(); locateButton }
                 }
             }
-            .padding(.horizontal, 16)
-            .padding(.top, 12)
-            .padding(.bottom, 14)
+            .padding(.horizontal, 12)
+            .padding(.top, 6)
+            .padding(.bottom, 8)
 
-            if isSearching || isRouting {
+            if isSearching || (isRouting && guidance.isActive) {
                 ProgressView(isRouting ? "规划路线…" : "搜索中…")
                     .padding(18)
                     .background(.regularMaterial, in: RoundedRectangle(cornerRadius: 16))
             }
         }
-        .preferredColorScheme(guidance.isActive ? .dark : nil)
         .tint(.blue)
         .onAppear {
             let session = guidance
@@ -441,47 +390,139 @@ struct ContentView: View {
         .accessibilityLabel("定位并放大")
     }
 
-    private func routePanel(_ route: MKRoute) -> some View {
-        VStack(alignment: .leading, spacing: 12) {
-                Text(destination?.name ?? "目的地")
-                    .font(.headline)
-                    .lineLimit(1)
-                Text("\(Int((route.expectedTravelTime / 60).rounded())) 分钟 · \(formattedDistance(route.distance))")
-                    .font(.subheadline)
-                    .foregroundStyle(.secondary)
+    private var panelBackground: Color { Color(uiColor: .systemBackground) }
 
-            if routes.count > 1 {
-                HStack(spacing: 8) {
-                    ForEach(routes.indices, id: \.self) { index in
-                        Button("路线 \(index + 1)") {
-                            chooseRoute(index)
+    private func floatingIcon(_ symbol: String) -> some View {
+        Image(systemName: symbol)
+            .font(.system(size: 20, weight: .semibold))
+            .foregroundStyle(Color.primary)
+            .frame(width: 50, height: 50)
+            .background(panelBackground, in: Circle())
+            .shadow(color: .black.opacity(0.15), radius: 5, y: 2)
+    }
+
+    private var guidanceHeader: some View {
+        HStack(alignment: .center, spacing: 18) {
+            Image(systemName: maneuverSymbol)
+                .font(.system(size: 46, weight: .bold))
+                .frame(width: 66)
+                .accessibilityHidden(true)
+            VStack(alignment: .leading, spacing: 6) {
+                Text(formattedDistance(guidance.distanceToTurn))
+                    .font(.system(size: 32, weight: .bold)).monospacedDigit()
+                Text(guidance.nextInstruction)
+                    .font(.system(size: 18, weight: .semibold)).lineLimit(3)
+            }
+            Spacer(minLength: 0)
+        }
+        .padding(18)
+        .foregroundStyle(.white)
+        .frame(maxWidth: .infinity, alignment: .leading)
+        .background(Color(red: 0.06, green: 0.38, blue: 0.29), in: RoundedRectangle(cornerRadius: 18))
+    }
+
+    private func guidanceFooter(_ route: MKRoute) -> some View {
+        let fraction = min(1, max(0, guidance.remainingDistance / max(1, route.distance)))
+        let minutes = max(1, Int(ceil(route.expectedTravelTime * fraction / 60)))
+        return VStack(alignment: .leading, spacing: 12) {
+            Capsule().fill(Color.secondary.opacity(0.35)).frame(width: 32, height: 4)
+                .frame(maxWidth: .infinity)
+            HStack(alignment: .center, spacing: 16) {
+                VStack(alignment: .leading, spacing: 5) {
+                    Text("\(minutes) 分钟")
+                        .font(.system(size: 30, weight: .bold)).monospacedDigit()
+                        .foregroundStyle(Color(red: 0.06, green: 0.48, blue: 0.32))
+                    Text("\(formattedDistance(guidance.remainingDistance)) · 预计 \(Date.now.addingTimeInterval(Double(minutes) * 60).formatted(date: .omitted, time: .shortened)) 到达")
+                        .font(.subheadline).foregroundStyle(.secondary)
+                    Text(destination?.name ?? "目的地")
+                        .font(.caption).foregroundStyle(.secondary).lineLimit(1)
+                }
+                Spacer(minLength: 0)
+                Button { stopNavigation() } label: {
+                    Image(systemName: "xmark")
+                        .font(.system(size: 18, weight: .bold))
+                        .frame(width: 48, height: 48)
+                        .background(Color.secondary.opacity(0.12), in: Circle())
+                }
+                .foregroundStyle(.primary)
+                .accessibilityLabel("结束导航")
+            }
+        }
+        .padding(18)
+        .background(panelBackground, in: RoundedRectangle(cornerRadius: 24))
+        .shadow(color: .black.opacity(0.12), radius: 8, y: 2)
+    }
+
+    private var routePanel: some View {
+        VStack(alignment: .leading, spacing: 14) {
+            Capsule().fill(Color.secondary.opacity(0.35)).frame(width: 32, height: 4)
+                .frame(maxWidth: .infinity)
+            Text(destination?.name ?? "目的地").font(.title2.bold()).lineLimit(1)
+            HStack(spacing: 10) {
+                modeButton("驾车", symbol: "car.fill", value: false)
+                modeButton("步行", symbol: "figure.walk", value: true)
+            }
+            if let route = selectedRoute {
+                HStack(alignment: .firstTextBaseline, spacing: 10) {
+                    Text("\(max(1, Int(ceil(route.expectedTravelTime / 60)))) 分钟")
+                        .font(.system(size: 30, weight: .bold)).monospacedDigit()
+                    Text(formattedDistance(route.distance))
+                        .font(.subheadline).foregroundStyle(.secondary)
+                }
+                if routes.count > 1 {
+                    ScrollView(.horizontal, showsIndicators: false) {
+                        HStack(spacing: 8) {
+                            ForEach(routes.indices, id: \.self) { index in
+                                Button { chooseRoute(index) } label: {
+                                    Text("路线 \(index + 1) · \(max(1, Int(ceil(routes[index].expectedTravelTime / 60)))) 分钟")
+                                        .font(.caption.weight(.semibold))
+                                        .padding(10)
+                                        .background(index == selectedRouteIndex ? Color.blue.opacity(0.15) : Color.secondary.opacity(0.09), in: Capsule())
+                                        .foregroundStyle(index == selectedRouteIndex ? Color.blue : Color.primary)
+                                }
+                                .buttonStyle(.plain)
+                            }
                         }
-                        .font(.caption.weight(index == selectedRouteIndex ? .bold : .regular))
-                        .padding(.horizontal, 10)
-                        .padding(.vertical, 7)
-                        .foregroundStyle(index == selectedRouteIndex ? Color.white : Color.primary)
-                        .background(index == selectedRouteIndex ? Color.blue : Color.gray.opacity(0.12),
-                                    in: Capsule())
                     }
                 }
-            }
-
-                Button {
-                    startNavigation()
-                } label: {
-                    Text("开始导航")
-                        .font(.subheadline.weight(.semibold))
-                        .frame(maxWidth: .infinity)
+                Button { startNavigation() } label: {
+                    Label("开始导航", systemImage: "location.north.fill")
+                        .font(.headline).frame(maxWidth: .infinity).padding(.vertical, 5)
                 }
                 .buttonStyle(.borderedProminent)
                 .controlSize(.large)
                 .disabled(isRouting)
                 .accessibilityIdentifier("mapx.startNavigation")
+            } else if isRouting {
+                ProgressView("正在规划路线")
+                    .frame(maxWidth: .infinity).padding(.vertical, 12)
+            } else {
+                Button("重新规划") { planRoute() }
+                    .buttonStyle(.borderedProminent)
+            }
         }
-        .padding(16)
+        .padding(18)
         .frame(maxWidth: .infinity, alignment: .leading)
-        .background(.regularMaterial, in: RoundedRectangle(cornerRadius: 20))
-        .shadow(color: .black.opacity(0.1), radius: 8, y: 3)
+        .background(panelBackground, in: RoundedRectangle(cornerRadius: 24))
+        .shadow(color: .black.opacity(0.12), radius: 8, y: 2)
+    }
+
+    private func modeButton(_ title: String, symbol: String, value: Bool) -> some View {
+        Button {
+            guard walking != value else { return }
+            walking = value
+            routes = []
+            selectedRouteIndex = 0
+            planRoute()
+        } label: {
+            Label(title, systemImage: symbol)
+                .font(.subheadline.weight(.semibold))
+                .frame(maxWidth: .infinity).padding(.vertical, 12)
+                .foregroundStyle(walking == value ? Color.blue : Color.primary)
+                .background(walking == value ? Color.blue.opacity(0.13) : Color.secondary.opacity(0.08), in: RoundedRectangle(cornerRadius: 12))
+        }
+        .buttonStyle(.plain)
+        .accessibilityAddTraits(walking == value ? .isSelected : [])
     }
 
     private func formattedDistance(_ meters: CLLocationDistance) -> String {
