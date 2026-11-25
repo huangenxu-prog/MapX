@@ -139,7 +139,7 @@ struct ContentView: View {
                     }
                     .padding(12)
                     .foregroundStyle(.white)
-                    .background(.ultraThinMaterial, in: RoundedRectangle(cornerRadius: 24))
+                    .background(Color(red: 0.07, green: 0.10, blue: 0.17).opacity(0.96), in: RoundedRectangle(cornerRadius: 24))
                 } else {
                     searchBar
                     if showingResults { searchResultsView }
@@ -201,7 +201,7 @@ struct ContentView: View {
             }
         }
         .onChange(of: guidance.needsReroute) { _, _ in
-            guard guidance.isActive, let fix = locationService.location else { return }
+            guard guidance.isActive, !isRouting, let fix = locationService.location else { return }
             planRoute(from: fix, continueNavigation: true)
         }
         .onChange(of: locationService.authorizationStatus) { _, status in
@@ -463,6 +463,8 @@ struct ContentView: View {
                         .frame(maxWidth: .infinity)
                 }
                 .buttonStyle(.borderedProminent)
+                .controlSize(.large)
+                .disabled(isRouting)
                 .accessibilityIdentifier("mapx.startNavigation")
         }
         .padding(16)
@@ -532,7 +534,7 @@ struct ContentView: View {
             isRouting = true
             defer { if !Task.isCancelled { isRouting = false } }
             let request = MKDirections.Request()
-            request.source = .forCurrentLocation()
+            request.source = fix.map { MKMapItem(placemark: MKPlacemark(coordinate: $0.coordinate)) } ?? .forCurrentLocation()
             request.destination = destination
             request.transportType = .automobile
             request.requestsAlternateRoutes = true
