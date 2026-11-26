@@ -10,6 +10,7 @@ struct DrivingMap: UIViewRepresentable {
     let walking: Bool
     let exploring: Bool
     let onExplore: () -> Void
+    let onNativeLocation: (CLLocation) -> Void
 
     func makeCoordinator() -> Coordinator { Coordinator() }
 
@@ -25,6 +26,7 @@ struct DrivingMap: UIViewRepresentable {
     func updateUIView(_ map: MKMapView, context: Context) {
         let driver = context.coordinator
         driver.onExplore = onExplore
+        driver.onNativeLocation = onNativeLocation
         map.overrideUserInterfaceStyle = context.environment.colorScheme == .dark ? .dark : .light
         if driver.currentRoute !== route {
             if let old = driver.line { map.removeOverlay(old) }
@@ -76,7 +78,7 @@ struct DrivingMap: UIViewRepresentable {
 
         func updatePosition(_ coordinate: CLLocationCoordinate2D, on map: MKMapView) {
             guard CLLocationCoordinate2DIsValid(coordinate) else { return }
-            map.showsUserLocation = false
+            map.showsUserLocation = true
             if let position {
                 position.coordinate = coordinate
             } else {
@@ -94,6 +96,12 @@ struct DrivingMap: UIViewRepresentable {
         }
         var exploring = false
         var onExplore: (() -> Void)?
+        var onNativeLocation: ((CLLocation) -> Void)?
+
+        func mapView(_ mapView: MKMapView, didUpdate userLocation: MKUserLocation) {
+            guard let fix = userLocation.location else { return }
+            DispatchQueue.main.async { [weak self] in self?.onNativeLocation?(fix) }
+        }
         var lastCenter: MKMapPoint?
         private var lastHeading: Double = 0
         private var lastDistance: CLLocationDistance = 700
@@ -127,6 +135,11 @@ struct DrivingMap: UIViewRepresentable {
         }
 
         func mapView(_ map: MKMapView, viewFor annotation: MKAnnotation) -> MKAnnotationView? {
+            if annotation is MKUserLocation {
+                let hidden = MKAnnotationView(annotation: annotation, reuseIdentifier: nil)
+                hidden.alpha = position == nil ? 1 : 0
+                return hidden
+            }
             guard let position, annotation === position else { return nil }
             let view = map.dequeueReusableAnnotationView(withIdentifier: "navigation-position") ?? MKAnnotationView(annotation: annotation, reuseIdentifier: "navigation-position")
             view.annotation = annotation

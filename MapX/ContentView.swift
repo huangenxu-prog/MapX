@@ -57,6 +57,8 @@ struct ContentView: View {
                            exploring: exploring, onExplore: {
                     exploring = true
                     scheduleFollowRecovery()
+                }, onNativeLocation: { native in
+                    guidance.compareMapLocation(native, raw: locationService.location)
                 })
                 .ignoresSafeArea()
             } else {
@@ -834,7 +836,8 @@ struct ContentView: View {
         routeTask = Task {
             defer { if !Task.isCancelled { isRouting = false } }
             let request = MKDirections.Request()
-            request.source = (fix ?? locationService.location).map { MKMapItem(placemark: MKPlacemark(coordinate: $0.coordinate)) } ?? .forCurrentLocation()
+            let sourceFix = fix ?? locationService.location
+            request.source = sourceFix.map { MKMapItem(placemark: MKPlacemark(coordinate: $0.coordinate)) } ?? .forCurrentLocation()
             request.destination = destination
             request.transportType = requestedWalking ? .walking : .automobile
             request.requestsAlternateRoutes = true
@@ -854,6 +857,7 @@ struct ContentView: View {
                     guard guidance.isActive else { return }
                     guidance.replaceRoute(response.routes[0],
                                           destination: destination.placemark.coordinate)
+                    guidance.recordRoutingSource(sourceFix, responseSource: response.source.placemark.location, newRoute: response.routes[0])
                     if let fix = locationService.location { guidance.update(fix) }
                 } else {
                     repeatedLocateDistance = nil

@@ -47,7 +47,7 @@ final class LocationService: NSObject, ObservableObject, CLLocationManagerDelega
         navigating = active
         manager.activityType = active && walking ? .fitness : .automotiveNavigation
         manager.desiredAccuracy = active ? kCLLocationAccuracyBestForNavigation : kCLLocationAccuracyBest
-        manager.distanceFilter = active ? (walking ? 2 : 5) : 10
+        manager.distanceFilter = active ? kCLDistanceFilterNone : 10
         manager.pausesLocationUpdatesAutomatically = !active
         // The Info.plist explicitly declares UIBackgroundModes/location. Enable this
         // *only* for a user-started trip, never just because the app was opened.

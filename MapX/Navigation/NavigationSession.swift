@@ -64,6 +64,23 @@ final class NavigationSession: ObservableObject {
         diagnosticHistory.append(message)
         if diagnosticHistory.count > 40 { diagnosticHistory.removeFirst() }
     }
+    func compareMapLocation(_ native: CLLocation, raw: CLLocation?) {
+        guard isActive, let route, let raw,
+              abs(native.timestamp.timeIntervalSinceNow) < 20,
+              abs(native.timestamp.timeIntervalSince(raw.timestamp)) < 5,
+              native.horizontalAccuracy >= 0 else { return }
+        let rawProgress = RouteGeometry.progress(on: route, location: raw)
+        let mapProgress = RouteGeometry.progress(on: route, location: native)
+        record(String(format: "地图对照 | 两定位相差 %.1fm | 原始偏距 %.1fm | 地图偏距 %.1fm", native.distance(from: raw), rawProgress.distanceFromRoute, mapProgress.distanceFromRoute))
+    }
+
+    func recordRoutingSource(_ source: CLLocation?, responseSource: CLLocation?, newRoute: MKRoute) {
+        guard isActive, let source, newRoute.polyline.pointCount > 0 else { return }
+        let gap = MKMapPoint(source.coordinate).distance(to: newRoute.polyline.points()[0])
+        let responseGap = responseSource.map { source.distance(from: $0) } ?? -1
+        record(String(format: "重规划 | 请求起点至路线 %.1fm | 响应起点偏差 %.1fm", gap, responseGap))
+    }
+
     @Published private(set) var remainingDistance: CLLocationDistance = 0
     @Published private(set) var needsReroute = 0
     @Published private(set) var arrived = false
@@ -237,7 +254,7 @@ final class NavigationSession: ObservableObject {
         } else {
             offRouteSamples = 0
         }
-        if offRouteSamples >= 3, Date().timeIntervalSince(lastRerouteAt) > (walking ? 20 : 30) {
+        if offRouteSamples >= (matchedDistance == nil ? 1 : 3), Date().timeIntervalSince(lastRerouteAt) > (walking ? 20 : 30) {
             lastRerouteAt = Date()
             offRouteSamples = 0
             needsReroute += 1
