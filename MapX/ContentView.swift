@@ -34,6 +34,7 @@ struct ContentView: View {
     @State private var repeatedLocateDistance: CLLocationDistance?
     @State private var pendingLocate = false
     @State private var exploring = false
+    @State private var showNavigationDiagnostics = false
     @State private var followRecoveryTask: Task<Void, Never>?
     @FocusState private var searchFocused: Bool
 
@@ -93,6 +94,7 @@ struct ContentView: View {
             VStack(spacing: 10) {
                 if guidance.isActive, let route = selectedRoute {
                     guidanceHeader
+                        .onLongPressGesture { showNavigationDiagnostics = true }
                     Spacer(minLength: 0)
                     HStack {
                         Spacer()
@@ -222,6 +224,26 @@ struct ContentView: View {
                 arrivalPlace = place
                 if let place {
                     camera = .region(MKCoordinateRegion(center: place.mapItem.placemark.coordinate, latitudinalMeters: 800, longitudinalMeters: 800))
+                }
+            }
+        }
+        .sheet(isPresented: $showNavigationDiagnostics) {
+            NavigationStack {
+                ScrollView {
+                    Text(guidance.diagnosticReport.isEmpty ? guidance.diagnostic : guidance.diagnosticReport)
+                        .font(.system(.footnote, design: .monospaced))
+                        .textSelection(.enabled)
+                        .frame(maxWidth: .infinity, alignment: .leading)
+                        .padding()
+                }
+                .navigationTitle("导航诊断")
+                .toolbar {
+                    ToolbarItem(placement: .topBarLeading) {
+                        Button("复制") { UIPasteboard.general.string = guidance.diagnosticReport }
+                    }
+                    ToolbarItem(placement: .topBarTrailing) {
+                        Button("完成") { showNavigationDiagnostics = false }
+                    }
                 }
             }
         }
@@ -812,7 +834,7 @@ struct ContentView: View {
         routeTask = Task {
             defer { if !Task.isCancelled { isRouting = false } }
             let request = MKDirections.Request()
-            request.source = .forCurrentLocation()
+            request.source = (fix ?? locationService.location).map { MKMapItem(placemark: MKPlacemark(coordinate: $0.coordinate)) } ?? .forCurrentLocation()
             request.destination = destination
             request.transportType = requestedWalking ? .walking : .automobile
             request.requestsAlternateRoutes = true

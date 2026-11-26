@@ -56,6 +56,14 @@ final class NavigationSession: ObservableObject {
     @Published private(set) var nextInstruction = "沿当前路线行驶"
     @Published private(set) var distanceToTurn: CLLocationDistance = 0
     @Published private(set) var hasRouteMatch = false
+    @Published private(set) var diagnostic = "尚未收到定位"
+    private var diagnosticHistory: [String] = []
+    var diagnosticReport: String { diagnosticHistory.joined(separator: "\n") }
+    private func record(_ message: String) {
+        diagnostic = message
+        diagnosticHistory.append(message)
+        if diagnosticHistory.count > 40 { diagnosticHistory.removeFirst() }
+    }
     @Published private(set) var remainingDistance: CLLocationDistance = 0
     @Published private(set) var needsReroute = 0
     @Published private(set) var arrived = false
@@ -94,6 +102,8 @@ final class NavigationSession: ObservableObject {
     func start(_ newRoute: MKRoute, destination: CLLocationCoordinate2D, walking: Bool = false) {
         stop()
         arrived = false
+        diagnosticHistory.removeAll()
+        record("导航启动 · 路线点数 \(newRoute.polyline.pointCount) · 距离 \(Int(newRoute.distance))m")
         self.walking = walking
         lastRerouteAt = .distantPast
         route = newRoute
@@ -147,9 +157,12 @@ final class NavigationSession: ObservableObject {
     }
 
     func update(_ fix: CLLocation) {
-        guard isActive, let route,
-              fix.horizontalAccuracy >= 0, fix.horizontalAccuracy <= 65,
-              abs(fix.timestamp.timeIntervalSinceNow) < 20 else { return }
+        guard isActive, let route else { return }
+        guard fix.horizontalAccuracy >= 0, fix.horizontalAccuracy <= 65,
+              abs(fix.timestamp.timeIntervalSinceNow) < 20 else {
+            record(String(format: "拒绝 GPS：精度 %.1fm，时间差 %.1fs", fix.horizontalAccuracy, abs(fix.timestamp.timeIntervalSinceNow)))
+            return
+        }
 
         guard lastFix.map({ fix.timestamp > $0.timestamp }) ?? true else { return }
         lastFix = fix
@@ -174,6 +187,9 @@ final class NavigationSession: ObservableObject {
         let displayTolerance = min(walking ? 18.0 : 30.0, max(8, fix.horizontalAccuracy * 1.5))
         displayCoordinate = matched && progress.distanceFromRoute <= displayTolerance ? progress.matchedCoordinate : nil
         hasRouteMatch = matched
+        let points = route.polyline.points()
+        let startGap = route.polyline.pointCount > 0 ? MKMapPoint(fix.coordinate).distance(to: points[0]) : -1
+        record(String(format: "%@ | GPS精度 %.1fm | 路线偏距 %.1fm | 起点距离 %.1fm | 已行 %.1fm | 点数 %d", matched ? "匹配成功" : "匹配失败", fix.horizontalAccuracy, progress.distanceFromRoute, startGap, progress.distanceAlongRoute, route.polyline.pointCount))
         if matched {
             matchedDistance = progress.distanceAlongRoute
             matchedAt = fix.timestamp
