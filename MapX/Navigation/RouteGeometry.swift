@@ -1,6 +1,5 @@
 import MapKit
 import CoreLocation
-import Turf
 
 struct RouteProgress {
     let remainingDistance: CLLocationDistance
@@ -11,7 +10,7 @@ struct RouteProgress {
     let matchedCoordinate: CLLocationCoordinate2D?
 }
 
-/// Turf provides the nearest point on each segment; continuity bounds prevent
+/// MapKit-native projection keeps all matching calculations in one coordinate space; continuity bounds prevent
 /// jumps at crossings. This is not lane-level or road-elevation matching.
 enum RouteGeometry {
     static func progress(on route: MKRoute, location: CLLocation, previousDistance: CLLocationDistance? = nil, maximumAdvance: CLLocationDistance = 100) -> RouteProgress {
@@ -74,10 +73,12 @@ enum RouteGeometry {
             let lower = max(0, (previousDistance ?? completed) - 45 - completed)
             let upper = min(segmentMeters, (previousDistance.map { $0 + maximumAdvance } ?? (completed + segmentMeters)) - completed)
             guard upper >= lower, segmentMeters > 0 else { completed += segmentMeters; continue }
-            let segment = LineString([start.coordinate, end.coordinate])
-            let nearest = segment.closestCoordinate(to: point.coordinate)
-            let candidate = nearest.map { MKMapPoint($0.coordinate) } ?? start
-            let offset = min(upper, max(lower, start.distance(to: candidate)))
+            let dx = end.x - start.x
+            let dy = end.y - start.y
+            let squared = dx * dx + dy * dy
+            guard squared > 0 else { completed += segmentMeters; continue }
+            let rawFraction = ((point.x - start.x) * dx + (point.y - start.y) * dy) / squared
+            let offset = min(upper, max(lower, rawFraction * segmentMeters))
             let fraction = offset / segmentMeters
             let projected = MKMapPoint(x: start.x + (end.x - start.x) * fraction,
                                        y: start.y + (end.y - start.y) * fraction)

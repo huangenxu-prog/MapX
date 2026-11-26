@@ -158,10 +158,17 @@ final class NavigationSession: ObservableObject {
         let speedLimit = walking ? 4.0 : 55.0
         let measuredSpeed = fix.speed >= 0 ? min(speedLimit, fix.speed) : (walking ? 2.0 : 12.0)
         let advance = max(35, min(800, elapsed * max(walking ? 2 : 8, measuredSpeed) * 1.8 + fix.horizontalAccuracy * 2))
-        let progress = RouteGeometry.progress(on: route, location: fix,
+        var progress = RouteGeometry.progress(on: route, location: fix,
                                               previousDistance: matchedDistance,
                                               maximumAdvance: advance)
         let matchTolerance = walking ? max(25, fix.horizontalAccuracy * 1.5) : max(45, fix.horizontalAccuracy * 1.5)
+        if progress.distanceFromRoute > matchTolerance, matchedDistance != nil {
+            let candidate = RouteGeometry.progress(on: route, location: fix)
+            if candidate.distanceFromRoute <= matchTolerance,
+               abs(candidate.distanceAlongRoute - (matchedDistance ?? 0)) <= max(advance, 150) {
+                progress = candidate
+            }
+        }
         let matched = progress.distanceFromRoute.isFinite && progress.distanceFromRoute <= matchTolerance
         // Display-only snap: keep raw GPS for arrival and off-route decisions.
         let displayTolerance = min(walking ? 18.0 : 30.0, max(8, fix.horizontalAccuracy * 1.5))
@@ -208,7 +215,7 @@ final class NavigationSession: ObservableObject {
             nextInstruction = walking ? "继续步行至目的地" : "继续行驶至目的地"
         }
 
-        if !matched && progress.distanceFromRoute > max(walking ? 40 : 90, fix.horizontalAccuracy * 2) {
+        if !matched {
             offRouteSamples += 1
             nextInstruction = "正在确认当前位置与路线"
         } else {

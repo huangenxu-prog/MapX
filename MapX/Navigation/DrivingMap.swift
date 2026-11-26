@@ -50,7 +50,7 @@ struct DrivingMap: UIViewRepresentable {
            abs(fix.timestamp.timeIntervalSinceNow) < 20 {
             driver.course.update(fix)
             driver.speed = max(0, fix.speed)
-            if let displayCoordinate { driver.updatePosition(displayCoordinate, on: map) } else { driver.clearPosition(on: map) }
+            driver.updatePosition(displayCoordinate ?? fix.coordinate, on: map)
         }
         if driver.exploring && !exploring { driver.lastCenter = nil }
         driver.exploring = exploring
@@ -101,7 +101,7 @@ struct DrivingMap: UIViewRepresentable {
         private var manualGesture = false
 
         func follow(_ map: MKMapView) {
-            guard !exploring, !manualGesture, routeMatched, let position else { return }
+            guard !exploring, !manualGesture, let position else { return }
             let point = MKMapPoint(position.coordinate)
             let heading = course.hasHeading ? course.degrees : map.camera.heading
             let desiredDistance = walking ? 350.0 : min(1500, max(700, 700 + speed * 22))
