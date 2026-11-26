@@ -1,0 +1,57 @@
+name: Organic Maps unsigned baseline
+on:
+  push:
+    branches: [experiment/organicmaps-baseline]
+    paths: ['.github/workflows/organicmaps-baseline.yml']
+  workflow_dispatch:
+permissions:
+  contents: read
+jobs:
+  baseline:
+    runs-on: macos-26
+    timeout-minutes: 120
+    steps:
+      - name: Checkout upstream at immutable revision
+        uses: actions/checkout@v6
+        with:
+          repository: organicmaps/organicmaps
+          ref: 694861218380a6164c518b81b30ca55b412b6cae
+          persist-credentials: false
+      - name: Prepare upstream dependencies
+        run: |
+          git submodule update --init --recursive --depth 1 --jobs 12
+          ls /Applications | grep Xcode
+          xcodebuild -version
+          if ! xcrun metal -v >/dev/null 2>&1; then
+            xcodebuild -downloadComponent MetalToolchain
+            xcrun -k
+          fi
+          xcrun metal -v
+      - name: Build original iOS application
+        run: |
+          set -o pipefail
+          xcodebuild build -workspace xcode/omim.xcworkspace -scheme OMaps -configuration Release -destination 'generic/platform=iOS' -derivedDataPath "$RUNNER_TEMP/organicmaps-build" CODE_SIGNING_REQUIRED=NO CODE_SIGNING_ALLOWED=NO COMPILER_INDEX_STORE_ENABLE=NO 2>&1 | tee "$RUNNER_TEMP/organicmaps-build.log"
+      - name: Package original unsigned IPA
+        run: |
+          set -euo pipefail
+          PRODUCTS="$RUNNER_TEMP/organicmaps-build/Build/Products/Release-iphoneos"
+          APP="$(find "$PRODUCTS" -maxdepth 1 -name '*.app' -type d | head -n 1)"
+          test -n "$APP"
+          /usr/libexec/PlistBuddy -c 'Print CFBundleIdentifier' "$APP/Info.plist"
+          /usr/libexec/PlistBuddy -c 'Print CFBundleExecutable' "$APP/Info.plist"
+          mkdir -p "$RUNNER_TEMP/package/Payload"
+          ditto "$APP" "$RUNNER_TEMP/package/Payload/$(basename "$APP")"
+          cd "$RUNNER_TEMP/package"
+          zip -qry "$RUNNER_TEMP/OrganicMaps-baseline-unsigned.ipa" Payload
+          unzip -tq "$RUNNER_TEMP/OrganicMaps-baseline-unsigned.ipa"
+      - uses: actions/upload-artifact@v4
+        with:
+          name: OrganicMaps-baseline-unsigned
+          path: ${{ runner.temp }}/OrganicMaps-baseline-unsigned.ipa
+          if-no-files-found: error
+      - uses: actions/upload-artifact@v4
+        if: always()
+        with:
+          name: OrganicMaps-build-log
+          path: ${{ runner.temp }}/organicmaps-build.log
+          if-no-files-found: ignore
